@@ -1,0 +1,27 @@
+[package]
+name = "peepsat"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+
+[dependencies]
+wgpu = { version = "0.19", features = ["webgl"] }
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+console_log = "1"
+cgmath = "0.18"
+image = "0.24"
+bytemuck = "1.0"
+tiny_http = "0.12"
+reqwest = { version = "0.12", features = ["blocking"] }
+
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "CanvasRenderingContext2d"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"

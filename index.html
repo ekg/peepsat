@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>PeepSat</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 6px 8px;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-family: sans-serif;
+      font-size: 12px;
+      border-radius: 4px;
+      z-index: 10;
+    }
+    #controls input, #controls select { font-size: 11px; }
+    canvas { width: 100vw; height: 100vh; display: block; background: #000; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label>Offset X <input id="offsetX" size="5"></label>
+    <label>Offset Y <input id="offsetY" size="5"></label>
+    <label>Zoom <input id="zoom" size="3"></label>
+    <label>Channel
+      <select id="channel">
+        <option value="GEOCOLOR">GeoColor</option>
+      </select>
+    </label>
+    <button id="go">Go</button>
+    <button id="share">Share</button>
+  </div>
+  <canvas id="canvas"></canvas>
+  <script src="./pkg/peepsat.js"></script>
+  <script>
+     const canvas = document.getElementById('canvas');
+     const logEl = document.createElement('div');
+     logEl.style.position = 'absolute';
+     logEl.style.bottom = '10px';
+     logEl.style.left = '10px';
+     logEl.style.padding = '4px 6px';
+     logEl.style.background = 'rgba(0,0,0,0.7)';
+     logEl.style.color = '#0f0';
+     logEl.style.fontFamily = 'monospace';
+     logEl.style.fontSize = '10px';
+     logEl.style.maxWidth = '50vw';
+     logEl.style.maxHeight = '40vh';
+     logEl.style.overflow = 'auto';
+     document.body.appendChild(logEl);
+     function log(msg) { logEl.textContent += msg + "\n"; }
+    const ctx = canvas.getContext('2d');
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const params = new URLSearchParams(location.search);
+    let centerX = parseFloat(params.get('cx') || '0.5');
+    let centerY = parseFloat(params.get('cy') || '0.5');
+    let zoom = parseFloat(params.get('z') || '1');
+    let channel = params.get('ch') || 'GEOCOLOR';
+
+    document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
+    document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
+    document.getElementById('zoom').value = String(zoom);
+    document.getElementById('channel').value = channel;
+
+    function updateUrl() {
+      const p = new URLSearchParams();
+      p.set('cx', centerX.toFixed(4));
+      p.set('cy', centerY.toFixed(4));
+      p.set('z', String(zoom));
+      p.set('ch', channel);
+      history.replaceState(null, '', '?' + p.toString());
+    }
+
+    function drawImageToFit(img) {
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const base = Math.max(cw / iw, ch / ih);
+      const scale = base * Math.pow(2, zoom - 1);
+      const dx = cw / 2 - centerX * iw * scale;
+      const dy = ch / 2 - centerY * ih * scale;
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.imageSmoothingEnabled = zoom < 2;
+      ctx.drawImage(img, dx, dy, iw * scale, ih * scale);
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, dx, dy, iw * scale, ih * scale);
+    }
+
+    function loadGoesEast() {
+      // Uses public GOES-East GeoColor full-disk PNG (latest)
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'white';
+       ctx.fillText('Loading GOES-East GeoColor...', 20, 30);
+       log('Loading /goes-proxy');
+        img.onload = () => { log('GOES image loaded'); currentImg = img; drawImageToFit(img); };
+      img.onerror = () => {
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+         ctx.fillStyle = 'red';
+         ctx.fillText('Failed to load GOES-East imagery', 20, 30);
+         log('Failed to load /goes-proxy');
+      };
+      img.src = '/goes-proxy';
+    }
+
+    document.getElementById('go').onclick = () => {
+      centerX = (parseFloat(document.getElementById('offsetX').value) || 50) / 100;
+      centerY = (parseFloat(document.getElementById('offsetY').value) || 50) / 100;
+      zoom = parseFloat(document.getElementById('zoom').value || '1');
+      channel = document.getElementById('channel').value;
+      updateUrl();
+      drawImageToFit(currentImg);
+    };
+
+    document.getElementById('share').onclick = () => {
+      const url = location.href;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url);
+      }
+      console.log('Share URL', url);
+    };
+
+     let currentImg = null;
+     loadGoesEast();
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const prevZoom = zoom;
+      const step = 0.25;
+      zoom += (e.deltaY < 0 ? step : -step);
+      if (zoom < 1) zoom = 1;
+      if (zoom > 8) zoom = 8;
+      if (!currentImg) return;
+      const iw = currentImg.naturalWidth;
+      const ih = currentImg.naturalHeight;
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const base = Math.max(cw / iw, ch / ih);
+      const prevScale = base * Math.pow(2, prevZoom - 1);
+      const newScale = base * Math.pow(2, zoom - 1);
+      const imgX = (mx - (canvas.width / 2 - centerX * iw * prevScale)) / (iw * prevScale);
+      const imgY = (my - (canvas.height / 2 - centerY * ih * prevScale)) / (ih * prevScale);
+      centerX = imgX;
+      centerY = imgY;
+      document.getElementById('zoom').value = String(zoom.toFixed(2));
+      document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
+      document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
+      updateUrl();
+      drawImageToFit(currentImg);
+    }, { passive: false });
+
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+
+    canvas.addEventListener('mousedown', (e) => {
+      dragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+
+    window.addEventListener('mouseup', () => { dragging = false; });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging || !currentImg) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      const iw = currentImg.naturalWidth;
+      const ih = currentImg.naturalHeight;
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const base = Math.max(cw / iw, ch / ih);
+      const scale = base * Math.pow(2, zoom - 1);
+      centerX -= dx / (iw * scale);
+      centerY -= dy / (ih * scale);
+      document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
+      document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
+      updateUrl();
+      drawImageToFit(currentImg);
+    });
+   </script>
+</body>
+</html>
