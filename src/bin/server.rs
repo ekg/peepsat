@@ -2,8 +2,25 @@ use std::fs;
 use tiny_http::{Server, Response, Request, Header};
 
 fn handle_goes_proxy(request: Request) {
-    let target = "https://cdn.star.nesdis.noaa.gov/GOES16/ABI/FD/GEOCOLOR/10848x10848.jpg";
-    let resp = reqwest::blocking::get(target);
+    // Parse query string for timestamp parameter
+    let url = request.url();
+    let timestamp = if let Some(pos) = url.find('?') {
+        let query = &url[pos+1..];
+        query.split('&')
+            .find(|s| s.starts_with("t="))
+            .and_then(|s| s.strip_prefix("t="))
+    } else {
+        None
+    };
+
+    let target = if let Some(ts) = timestamp {
+        format!("https://cdn.star.nesdis.noaa.gov/GOES16/ABI/FD/GEOCOLOR/{}_GOES16-ABI-FD-GEOCOLOR-10848x10848.jpg", ts)
+    } else {
+        "https://cdn.star.nesdis.noaa.gov/GOES16/ABI/FD/GEOCOLOR/latest.jpg".to_string()
+    };
+
+    println!("Fetching: {}", target);
+    let resp = reqwest::blocking::get(&target);
     match resp {
         Ok(r) => {
             let status = r.status();
