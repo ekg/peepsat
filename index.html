@@ -18,6 +18,50 @@
       z-index: 10;
     }
     #controls input, #controls select { font-size: 11px; }
+    #controls button { font-size: 11px; margin: 2px; }
+    #status {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      padding: 6px 8px;
+      background: rgba(0,0,0,0.7);
+      color: #0f0;
+      font-family: monospace;
+      font-size: 10px;
+      border-radius: 4px;
+      z-index: 10;
+      max-width: 300px;
+      max-height: 200px;
+      overflow: auto;
+    }
+    #progress {
+      position: absolute;
+      bottom: 220px;
+      right: 10px;
+      padding: 6px 8px;
+      background: rgba(0,0,0,0.8);
+      color: #fff;
+      font-family: sans-serif;
+      font-size: 11px;
+      border-radius: 4px;
+      z-index: 10;
+      min-width: 200px;
+      display: none;
+    }
+    #progressBar {
+      width: 100%;
+      height: 20px;
+      background: #333;
+      border-radius: 3px;
+      margin-top: 5px;
+      overflow: hidden;
+    }
+    #progressFill {
+      height: 100%;
+      background: linear-gradient(90deg, #4CAF50, #8BC34A);
+      width: 0%;
+      transition: width 0.3s;
+    }
     canvas { width: 100vw; height: 100vh; display: block; background: #000; }
   </style>
 </head>
@@ -26,37 +70,46 @@
     <label>Offset X <input id="offsetX" size="5"></label>
     <label>Offset Y <input id="offsetY" size="5"></label>
     <label>Zoom <input id="zoom" size="3"></label>
-    <label>Channel
-      <select id="channel">
-        <option value="GEOCOLOR">GeoColor</option>
-      </select>
-    </label>
-    <button id="go">Go</button>
+    <br>
+    <label>Hours <input id="hours" type="number" min="1" max="24" value="3" size="3"></label>
+    <button id="load">Load</button>
+    <button id="play">Play</button>
+    <button id="pause">Pause</button>
+    <label>FPS <input id="fps" type="number" min="1" max="30" value="5" size="2"></label>
+    <br>
+    <label>Frame <span id="frameInfo">0/0</span></label>
     <button id="share">Share</button>
   </div>
+  <div id="progress">
+    <div id="progressText">Loading images...</div>
+    <div id="progressBar"><div id="progressFill"></div></div>
+  </div>
+  <div id="status"></div>
   <canvas id="canvas"></canvas>
   <script src="./pkg/peepsat.js"></script>
   <script>
-     const canvas = document.getElementById('canvas');
-     const logEl = document.createElement('div');
-     logEl.style.position = 'absolute';
-     logEl.style.bottom = '10px';
-     logEl.style.left = '10px';
-     logEl.style.padding = '4px 6px';
-     logEl.style.background = 'rgba(0,0,0,0.7)';
-     logEl.style.color = '#0f0';
-     logEl.style.fontFamily = 'monospace';
-     logEl.style.fontSize = '10px';
-     logEl.style.maxWidth = '50vw';
-     logEl.style.maxHeight = '40vh';
-     logEl.style.overflow = 'auto';
-     document.body.appendChild(logEl);
-     function log(msg) { logEl.textContent += msg + "\n"; }
+    const canvas = document.getElementById('canvas');
+    const statusEl = document.getElementById('status');
+    const progressEl = document.getElementById('progress');
+    const progressText = document.getElementById('progressText');
+    const progressFill = document.getElementById('progressFill');
+
+    function log(msg) {
+      statusEl.textContent += msg + "\n";
+      statusEl.scrollTop = statusEl.scrollHeight;
+    }
+
     const ctx = canvas.getContext('2d');
 
     function resize() {
+      const oldW = canvas.width;
+      const oldH = canvas.height;
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
+      // Redraw current frame on resize without changing zoom/pan
+      if (currentFrame >= 0 && imageCache.length > 0) {
+        drawImageToFit(imageCache[currentFrame]);
+      }
     }
     window.addEventListener('resize', resize);
     resize();
@@ -65,23 +118,24 @@
     let centerX = parseFloat(params.get('cx') || '0.5');
     let centerY = parseFloat(params.get('cy') || '0.5');
     let zoom = parseFloat(params.get('z') || '1');
-    let channel = params.get('ch') || 'GEOCOLOR';
+    let hours = parseInt(params.get('h') || '3');
 
     document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
     document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
     document.getElementById('zoom').value = String(zoom);
-    document.getElementById('channel').value = channel;
+    document.getElementById('hours').value = hours;
 
     function updateUrl() {
       const p = new URLSearchParams();
       p.set('cx', centerX.toFixed(4));
       p.set('cy', centerY.toFixed(4));
       p.set('z', String(zoom));
-      p.set('ch', channel);
+      p.set('h', String(hours));
       history.replaceState(null, '', '?' + p.toString());
     }
 
     function drawImageToFit(img) {
+      if (!img) return;
       const iw = img.naturalWidth;
       const ih = img.naturalHeight;
       const cw = canvas.width;
@@ -93,53 +147,187 @@
       ctx.clearRect(0, 0, cw, ch);
       ctx.imageSmoothingEnabled = zoom < 2;
       ctx.drawImage(img, dx, dy, iw * scale, ih * scale);
-      ctx.clearRect(0, 0, cw, ch);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, dx, dy, iw * scale, ih * scale);
     }
 
-    function loadGoesEast() {
-      // Uses public GOES-East GeoColor full-disk PNG (latest)
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      ctx.fillStyle = 'black';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = 'white';
-       ctx.fillText('Loading GOES-East GeoColor...', 20, 30);
-       log('Loading /goes-proxy');
-        img.onload = () => { log('GOES image loaded'); currentImg = img; drawImageToFit(img); };
-      img.onerror = () => {
-        ctx.fillStyle = 'black';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-         ctx.fillStyle = 'red';
-         ctx.fillText('Failed to load GOES-East imagery', 20, 30);
-         log('Failed to load /goes-proxy');
-      };
-      img.src = '/goes-proxy';
+    // Image cache and animation
+    let imageCache = [];
+    let timestamps = [];
+    let currentFrame = -1;
+    let isPlaying = false;
+    let animationInterval = null;
+
+    function updateFrameInfo() {
+      document.getElementById('frameInfo').textContent =
+        `${currentFrame + 1}/${imageCache.length}`;
     }
 
-    document.getElementById('go').onclick = () => {
-      centerX = (parseFloat(document.getElementById('offsetX').value) || 50) / 100;
-      centerY = (parseFloat(document.getElementById('offsetY').value) || 50) / 100;
-      zoom = parseFloat(document.getElementById('zoom').value || '1');
-      channel = document.getElementById('channel').value;
+    function generateTimestamps(hoursBack) {
+      const now = new Date();
+      const result = [];
+      // GOES updates every 10 minutes, 6 times per hour
+      const totalFrames = hoursBack * 6;
+
+      for (let i = totalFrames - 1; i >= 0; i--) {
+        const time = new Date(now.getTime() - i * 10 * 60 * 1000);
+        // Round to nearest 10 minutes
+        time.setMinutes(Math.floor(time.getMinutes() / 10) * 10);
+        time.setSeconds(0);
+        time.setMilliseconds(0);
+
+        const year = time.getUTCFullYear();
+        const dayOfYear = Math.floor((time - new Date(Date.UTC(year, 0, 0))) / 86400000);
+        const hour = String(time.getUTCHours()).padStart(2, '0');
+        const minute = String(time.getUTCMinutes()).padStart(2, '0');
+
+        result.push(`${year}${String(dayOfYear).padStart(3, '0')}${hour}${minute}`);
+      }
+
+      return result;
+    }
+
+    async function loadImages(hoursBack) {
+      progressEl.style.display = 'block';
+      imageCache = [];
+      timestamps = generateTimestamps(hoursBack);
+      currentFrame = -1;
+
+      log(`Loading ${timestamps.length} images for last ${hoursBack} hours...`);
+
+      const MAX_CACHE_SIZE = 50; // Limit cache size
+      const framesToLoad = Math.min(timestamps.length, MAX_CACHE_SIZE);
+
+      for (let i = 0; i < framesToLoad; i++) {
+        const ts = timestamps[i];
+        progressText.textContent = `Loading image ${i + 1}/${framesToLoad}...`;
+        progressFill.style.width = `${((i + 1) / framesToLoad) * 100}%`;
+
+        try {
+          const img = await loadImage(`/goes-proxy?t=${ts}`);
+          imageCache.push(img);
+          log(`Loaded ${ts}`);
+
+          // Display first image immediately
+          if (i === 0) {
+            currentFrame = 0;
+            drawImageToFit(img);
+            updateFrameInfo();
+          }
+        } catch (err) {
+          log(`Failed to load ${ts}: ${err.message}`);
+          // On error, try loading 'latest' as fallback for first image
+          if (i === 0) {
+            try {
+              const img = await loadImage('/goes-proxy');
+              imageCache.push(img);
+              currentFrame = 0;
+              drawImageToFit(img);
+              updateFrameInfo();
+            } catch (e) {
+              log(`Failed to load fallback: ${e.message}`);
+            }
+          }
+        }
+      }
+
+      progressEl.style.display = 'none';
+      log(`Loaded ${imageCache.length} images successfully`);
+    }
+
+    function loadImage(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Failed to load'));
+        img.src = url;
+      });
+    }
+
+    function playAnimation() {
+      if (imageCache.length === 0) {
+        log('No images loaded. Click Load first.');
+        return;
+      }
+
+      isPlaying = true;
+      const fps = parseInt(document.getElementById('fps').value) || 5;
+
+      if (animationInterval) clearInterval(animationInterval);
+
+      animationInterval = setInterval(() => {
+        currentFrame = (currentFrame + 1) % imageCache.length;
+        drawImageToFit(imageCache[currentFrame]);
+        updateFrameInfo();
+      }, 1000 / fps);
+
+      log(`Playing animation at ${fps} FPS`);
+    }
+
+    function pauseAnimation() {
+      isPlaying = false;
+      if (animationInterval) {
+        clearInterval(animationInterval);
+        animationInterval = null;
+      }
+      log('Paused');
+    }
+
+    // Periodic sync - check for new images every 10 minutes
+    setInterval(async () => {
+      if (imageCache.length === 0) return;
+
+      log('Checking for new images...');
+      const latestTs = timestamps[timestamps.length - 1];
+      const now = new Date();
+      const year = now.getUTCFullYear();
+      const dayOfYear = Math.floor((now - new Date(Date.UTC(year, 0, 0))) / 86400000);
+      const hour = String(now.getUTCHours()).padStart(2, '0');
+      const minute = String(Math.floor(now.getUTCMinutes() / 10) * 10).padStart(2, '0');
+      const currentTs = `${year}${String(dayOfYear).padStart(3, '0')}${hour}${minute}`;
+
+      if (currentTs > latestTs) {
+        try {
+          const img = await loadImage(`/goes-proxy?t=${currentTs}`);
+          imageCache.push(img);
+          timestamps.push(currentTs);
+          // Remove oldest if cache too large
+          if (imageCache.length > 50) {
+            imageCache.shift();
+            timestamps.shift();
+            if (currentFrame > 0) currentFrame--;
+          }
+          log(`Added new image: ${currentTs}`);
+          updateFrameInfo();
+        } catch (err) {
+          log(`No new image available yet`);
+        }
+      }
+    }, 10 * 60 * 1000); // Every 10 minutes
+
+    // Event listeners
+    document.getElementById('load').onclick = () => {
+      hours = parseInt(document.getElementById('hours').value) || 3;
+      pauseAnimation();
       updateUrl();
-      drawImageToFit(currentImg);
+      loadImages(hours);
     };
+
+    document.getElementById('play').onclick = playAnimation;
+    document.getElementById('pause').onclick = pauseAnimation;
 
     document.getElementById('share').onclick = () => {
       const url = location.href;
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(url);
+        log('URL copied to clipboard');
       }
-      console.log('Share URL', url);
     };
 
-     let currentImg = null;
-     loadGoesEast();
-
+    // Wheel zoom (same as before but preserves animation state)
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (imageCache.length === 0) return;
+
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
@@ -148,9 +336,12 @@
       zoom += (e.deltaY < 0 ? step : -step);
       if (zoom < 1) zoom = 1;
       if (zoom > 8) zoom = 8;
-      if (!currentImg) return;
-      const iw = currentImg.naturalWidth;
-      const ih = currentImg.naturalHeight;
+
+      const img = imageCache[currentFrame];
+      if (!img) return;
+
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
       const cw = canvas.width;
       const ch = canvas.height;
       const base = Math.max(cw / iw, ch / ih);
@@ -160,13 +351,15 @@
       const imgY = (my - (ch / 2 - centerY * ih * prevScale)) / (ih * prevScale);
       centerX = imgX - (mx - cw / 2) / (iw * newScale);
       centerY = imgY - (my - ch / 2) / (ih * newScale);
+
       document.getElementById('zoom').value = String(zoom.toFixed(2));
       document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
       document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
       updateUrl();
-      drawImageToFit(currentImg);
+      drawImageToFit(img);
     }, { passive: false });
 
+    // Pan (dragging)
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
@@ -180,24 +373,33 @@
     window.addEventListener('mouseup', () => { dragging = false; });
 
     window.addEventListener('mousemove', (e) => {
-      if (!dragging || !currentImg) return;
+      if (!dragging || imageCache.length === 0) return;
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
-      const iw = currentImg.naturalWidth;
-      const ih = currentImg.naturalHeight;
+
+      const img = imageCache[currentFrame];
+      if (!img) return;
+
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
       const cw = canvas.width;
       const ch = canvas.height;
       const base = Math.max(cw / iw, ch / ih);
       const scale = base * Math.pow(2, zoom - 1);
       centerX -= dx / (iw * scale);
       centerY -= dy / (ih * scale);
+
       document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
       document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
       updateUrl();
-      drawImageToFit(currentImg);
+      drawImageToFit(img);
     });
-   </script>
+
+    // Auto-load on start
+    log('Ready. Click Load to fetch images.');
+    loadImages(hours);
+  </script>
 </body>
 </html>
