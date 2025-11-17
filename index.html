@@ -156,10 +156,10 @@
       const base = Math.max(cw / iw, ch / ih);
       const prevScale = base * Math.pow(2, prevZoom - 1);
       const newScale = base * Math.pow(2, zoom - 1);
-      const imgX = (mx - (canvas.width / 2 - centerX * iw * prevScale)) / (iw * prevScale);
-      const imgY = (my - (canvas.height / 2 - centerY * ih * prevScale)) / (ih * prevScale);
-      centerX = imgX;
-      centerY = imgY;
+      const imgX = (mx - (cw / 2 - centerX * iw * prevScale)) / (iw * prevScale);
+      const imgY = (my - (ch / 2 - centerY * ih * prevScale)) / (ih * prevScale);
+      centerX = imgX - (mx - cw / 2) / (iw * newScale);
+      centerY = imgY - (my - ch / 2) / (ih * newScale);
       document.getElementById('zoom').value = String(zoom.toFixed(2));
       document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
       document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
