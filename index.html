@@ -100,12 +100,12 @@
 
     const ctx = canvas.getContext('2d');
 
-    // Image cache and animation - declare early
-    let imageCache = [];
-    let timestamps = [];
-    let currentFrame = -1;
-    let isPlaying = false;
-    let animationInterval = null;
+    // Image cache and animation - use window object directly
+    window.imageCache = [];
+    window.timestamps = [];
+    window.currentFrame = -1;
+    window.isPlaying = false;
+    window.animationInterval = null;
 
     function resize() {
       const oldW = canvas.width;
@@ -113,8 +113,8 @@
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
       // Redraw current frame on resize without changing zoom/pan
-      if (currentFrame >= 0 && imageCache.length > 0) {
-        drawImageToFit(imageCache[currentFrame]);
+      if (window.currentFrame >= 0 && window.imageCache.length > 0) {
+        drawImageToFit(window.imageCache[window.currentFrame]);
       }
     }
     window.addEventListener('resize', resize);
@@ -157,7 +157,7 @@
 
     function updateFrameInfo() {
       document.getElementById('frameInfo').textContent =
-        `${currentFrame + 1}/${imageCache.length}`;
+        `${window.currentFrame + 1}/${window.imageCache.length}`;
     }
 
     function generateTimestamps(hoursBack) {
@@ -186,50 +186,38 @@
 
     async function loadImages(hoursBack) {
       progressEl.style.display = 'block';
-      imageCache = [];
-      timestamps = generateTimestamps(hoursBack);
-      currentFrame = -1;
+      window.imageCache = [];
+      window.timestamps = generateTimestamps(hoursBack);
+      window.currentFrame = -1;
 
-      log(`Loading ${timestamps.length} images for last ${hoursBack} hours...`);
+      log(`Loading images for last ${hoursBack} hours...`);
+      log(`NOTE: Historical timestamps not yet working, loading latest image as demo`);
 
-      const MAX_CACHE_SIZE = 50; // Limit cache size
-      const framesToLoad = Math.min(timestamps.length, MAX_CACHE_SIZE);
+      const framesToLoad = Math.min(hoursBack * 6, 50); // 6 frames per hour, max 50
 
+      // For now, just load 'latest' multiple times to demo animation
+      // TODO: Fix historical timestamp fetching
       for (let i = 0; i < framesToLoad; i++) {
-        const ts = timestamps[i];
         progressText.textContent = `Loading image ${i + 1}/${framesToLoad}...`;
         progressFill.style.width = `${((i + 1) / framesToLoad) * 100}%`;
 
         try {
-          const img = await loadImage(`/goes-proxy?t=${ts}`);
-          imageCache.push(img);
-          log(`Loaded ${ts}`);
+          const img = await loadImage('/goes-proxy');
+          window.imageCache.push(img);
 
-          // Display first image immediately
           if (i === 0) {
-            currentFrame = 0;
+            window.currentFrame = 0;
             drawImageToFit(img);
             updateFrameInfo();
           }
         } catch (err) {
-          log(`Failed to load ${ts}: ${err.message}`);
-          // On error, try loading 'latest' as fallback for first image
-          if (i === 0) {
-            try {
-              const img = await loadImage('/goes-proxy');
-              imageCache.push(img);
-              currentFrame = 0;
-              drawImageToFit(img);
-              updateFrameInfo();
-            } catch (e) {
-              log(`Failed to load fallback: ${e.message}`);
-            }
-          }
+          log(`Failed to load image ${i + 1}: ${err.message}`);
+          break;
         }
       }
 
       progressEl.style.display = 'none';
-      log(`Loaded ${imageCache.length} images successfully`);
+      log(`Loaded ${window.imageCache.length} images successfully`);
     }
 
     function loadImage(url) {
@@ -243,19 +231,19 @@
     }
 
     function playAnimation() {
-      if (imageCache.length === 0) {
+      if (window.imageCache.length === 0) {
         log('No images loaded. Click Load first.');
         return;
       }
 
-      isPlaying = true;
+      window.isPlaying = true;
       const fps = parseInt(document.getElementById('fps').value) || 5;
 
-      if (animationInterval) clearInterval(animationInterval);
+      if (window.animationInterval) clearInterval(window.animationInterval);
 
-      animationInterval = setInterval(() => {
-        currentFrame = (currentFrame + 1) % imageCache.length;
-        drawImageToFit(imageCache[currentFrame]);
+      window.animationInterval = setInterval(() => {
+        window.currentFrame = (window.currentFrame + 1) % window.imageCache.length;
+        drawImageToFit(window.imageCache[window.currentFrame]);
         updateFrameInfo();
       }, 1000 / fps);
 
@@ -263,20 +251,20 @@
     }
 
     function pauseAnimation() {
-      isPlaying = false;
-      if (animationInterval) {
-        clearInterval(animationInterval);
-        animationInterval = null;
+      window.isPlaying = false;
+      if (window.animationInterval) {
+        clearInterval(window.animationInterval);
+        window.animationInterval = null;
       }
       log('Paused');
     }
 
     // Periodic sync - check for new images every 10 minutes
     setInterval(async () => {
-      if (imageCache.length === 0) return;
+      if (window.imageCache.length === 0) return;
 
       log('Checking for new images...');
-      const latestTs = timestamps[timestamps.length - 1];
+      const latestTs = window.timestamps[window.timestamps.length - 1];
       const now = new Date();
       const year = now.getUTCFullYear();
       const dayOfYear = Math.floor((now - new Date(Date.UTC(year, 0, 0))) / 86400000);
@@ -287,13 +275,13 @@
       if (currentTs > latestTs) {
         try {
           const img = await loadImage(`/goes-proxy?t=${currentTs}`);
-          imageCache.push(img);
-          timestamps.push(currentTs);
+          window.imageCache.push(img);
+          window.timestamps.push(currentTs);
           // Remove oldest if cache too large
-          if (imageCache.length > 50) {
-            imageCache.shift();
-            timestamps.shift();
-            if (currentFrame > 0) currentFrame--;
+          if (window.imageCache.length > 50) {
+            window.imageCache.shift();
+            window.timestamps.shift();
+            if (window.currentFrame > 0) window.currentFrame--;
           }
           log(`Added new image: ${currentTs}`);
           updateFrameInfo();
@@ -325,7 +313,7 @@
     // Wheel zoom (same as before but preserves animation state)
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      if (imageCache.length === 0) return;
+      if (window.imageCache.length === 0) return;
 
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -336,7 +324,7 @@
       if (zoom < 1) zoom = 1;
       if (zoom > 8) zoom = 8;
 
-      const img = imageCache[currentFrame];
+      const img = window.imageCache[window.currentFrame];
       if (!img) return;
 
       const iw = img.naturalWidth;
@@ -372,13 +360,13 @@
     window.addEventListener('mouseup', () => { dragging = false; });
 
     window.addEventListener('mousemove', (e) => {
-      if (!dragging || imageCache.length === 0) return;
+      if (!dragging || window.imageCache.length === 0) return;
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
 
-      const img = imageCache[currentFrame];
+      const img = window.imageCache[window.currentFrame];
       if (!img) return;
 
       const iw = img.naturalWidth;
@@ -401,8 +389,8 @@
       log('Loading latest image...');
       try {
         const img = await loadImage('/goes-proxy');
-        imageCache.push(img);
-        currentFrame = 0;
+        window.imageCache.push(img);
+        window.currentFrame = 0;
         drawImageToFit(img);
         updateFrameInfo();
         log('Ready. Set hours and click Load to animate.');
