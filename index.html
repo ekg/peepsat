@@ -163,24 +163,23 @@
     function generateTimestamps(hoursBack) {
       const now = new Date();
       const result = [];
-      // IEM updates every 15 minutes, 4 times per hour
-      const totalFrames = hoursBack * 4;
+      // GOES updates every 10 minutes, 6 times per hour
+      const totalFrames = hoursBack * 6;
 
       for (let i = totalFrames - 1; i >= 0; i--) {
-        const time = new Date(now.getTime() - i * 15 * 60 * 1000);
-        // Round to nearest 15 minutes (00, 15, 30, 45)
-        time.setMinutes(Math.floor(time.getMinutes() / 15) * 15);
+        const time = new Date(now.getTime() - i * 10 * 60 * 1000);
+        // Round to nearest 10 minutes
+        time.setMinutes(Math.floor(time.getMinutes() / 10) * 10);
         time.setSeconds(0);
         time.setMilliseconds(0);
 
         const year = time.getUTCFullYear();
-        const month = String(time.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(time.getUTCDate()).padStart(2, '0');
+        const dayOfYear = Math.floor((time - new Date(Date.UTC(year, 0, 0))) / 86400000);
         const hour = String(time.getUTCHours()).padStart(2, '0');
         const minute = String(time.getUTCMinutes()).padStart(2, '0');
 
-        // Format: YYYY-MM-DD-HHMM for IEM archive
-        result.push(`${year}-${month}-${day}-${hour}${minute}`);
+        // Format: YYYYDDDHHMM for GOES-18 GeoColor
+        result.push(`${year}${String(dayOfYear).padStart(3, '0')}${hour}${minute}`);
       }
 
       return result;
@@ -192,7 +191,7 @@
       window.timestamps = generateTimestamps(hoursBack);
       window.currentFrame = -1;
 
-      log(`Loading ${window.timestamps.length} images from IEM archive...`);
+      log(`Loading ${window.timestamps.length} GeoColor images from GOES-18...`);
 
       const MAX_CACHE_SIZE = 50;
       const framesToLoad = Math.min(window.timestamps.length, MAX_CACHE_SIZE);
