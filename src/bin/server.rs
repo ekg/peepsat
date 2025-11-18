@@ -1,5 +1,19 @@
 use std::fs;
+use std::io::Cursor;
 use tiny_http::{Server, Response, Request, Header};
+use image::{ImageOutputFormat, codecs::tiff::TiffDecoder};
+
+fn convert_tiff_to_jpeg(tiff_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // Decode TIFF
+    let decoder = TiffDecoder::new(Cursor::new(tiff_bytes))?;
+    let img = image::DynamicImage::from_decoder(decoder)?;
+
+    // Encode as JPEG
+    let mut jpeg_bytes = Vec::new();
+    img.write_to(&mut Cursor::new(&mut jpeg_bytes), ImageOutputFormat::Jpeg(85))?;
+
+    Ok(jpeg_bytes)
+}
 
 fn handle_goes_proxy(request: Request) {
     // Parse query string for timestamp parameter (YYYY-MM-DD-HHMM format)
@@ -34,14 +48,27 @@ fn handle_goes_proxy(request: Request) {
             let status = r.status();
             let bytes = r.bytes().unwrap_or_default();
             println!("GOES proxy success: status={} len={}", status, bytes.len());
-            let mut response = Response::from_data(bytes.to_vec());
+
+            // Convert TIFF to JPEG for browser compatibility
+            let response_bytes = if target.ends_with(".tif") && status.is_success() {
+                match convert_tiff_to_jpeg(&bytes) {
+                    Ok(jpeg_bytes) => {
+                        println!("Converted TIFF to JPEG: {} -> {} bytes", bytes.len(), jpeg_bytes.len());
+                        jpeg_bytes
+                    }
+                    Err(e) => {
+                        println!("TIFF conversion failed: {:?}, returning original", e);
+                        bytes.to_vec()
+                    }
+                }
+            } else {
+                bytes.to_vec()
+            };
+
+            let mut response = Response::from_data(response_bytes);
             if status.is_success() {
-                let content_type = if target.ends_with(".tif") {
-                    "image/tiff"
-                } else {
-                    "image/jpeg"
-                };
-                response = response.with_header(Header::from_bytes("Content-Type", content_type).unwrap());
+                // Always serve as JPEG after conversion
+                response = response.with_header(Header::from_bytes("Content-Type", "image/jpeg").unwrap());
             }
             let _ = request.respond(response);
         }
