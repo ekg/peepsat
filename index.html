@@ -163,22 +163,24 @@
     function generateTimestamps(hoursBack) {
       const now = new Date();
       const result = [];
-      // GOES updates every 10 minutes, 6 times per hour
-      const totalFrames = hoursBack * 6;
+      // IEM updates every 15 minutes, 4 times per hour
+      const totalFrames = hoursBack * 4;
 
       for (let i = totalFrames - 1; i >= 0; i--) {
-        const time = new Date(now.getTime() - i * 10 * 60 * 1000);
-        // Round to nearest 10 minutes
-        time.setMinutes(Math.floor(time.getMinutes() / 10) * 10);
+        const time = new Date(now.getTime() - i * 15 * 60 * 1000);
+        // Round to nearest 15 minutes (00, 15, 30, 45)
+        time.setMinutes(Math.floor(time.getMinutes() / 15) * 15);
         time.setSeconds(0);
         time.setMilliseconds(0);
 
         const year = time.getUTCFullYear();
-        const dayOfYear = Math.floor((time - new Date(Date.UTC(year, 0, 0))) / 86400000);
+        const month = String(time.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(time.getUTCDate()).padStart(2, '0');
         const hour = String(time.getUTCHours()).padStart(2, '0');
         const minute = String(time.getUTCMinutes()).padStart(2, '0');
 
-        result.push(`${year}${String(dayOfYear).padStart(3, '0')}${hour}${minute}`);
+        // Format: YYYY-MM-DD-HHMM for IEM archive
+        result.push(`${year}-${month}-${day}-${hour}${minute}`);
       }
 
       return result;
@@ -190,20 +192,20 @@
       window.timestamps = generateTimestamps(hoursBack);
       window.currentFrame = -1;
 
-      log(`Loading images for last ${hoursBack} hours...`);
-      log(`NOTE: Historical timestamps not yet working, loading latest image as demo`);
+      log(`Loading ${window.timestamps.length} images from IEM archive...`);
 
-      const framesToLoad = Math.min(hoursBack * 6, 50); // 6 frames per hour, max 50
+      const MAX_CACHE_SIZE = 50;
+      const framesToLoad = Math.min(window.timestamps.length, MAX_CACHE_SIZE);
 
-      // For now, just load 'latest' multiple times to demo animation
-      // TODO: Fix historical timestamp fetching
       for (let i = 0; i < framesToLoad; i++) {
+        const ts = window.timestamps[i];
         progressText.textContent = `Loading image ${i + 1}/${framesToLoad}...`;
         progressFill.style.width = `${((i + 1) / framesToLoad) * 100}%`;
 
         try {
-          const img = await loadImage('/goes-proxy');
+          const img = await loadImage(`/goes-proxy?t=${ts}`);
           window.imageCache.push(img);
+          log(`Loaded ${ts}`);
 
           if (i === 0) {
             window.currentFrame = 0;
@@ -211,13 +213,17 @@
             updateFrameInfo();
           }
         } catch (err) {
-          log(`Failed to load image ${i + 1}: ${err.message}`);
-          break;
+          log(`Failed to load ${ts}: ${err.message}`);
+          // Try to continue with next image
         }
       }
 
       progressEl.style.display = 'none';
       log(`Loaded ${window.imageCache.length} images successfully`);
+
+      if (window.imageCache.length === 0) {
+        log('No images loaded. Try reducing the hours or check your connection.');
+      }
     }
 
     function loadImage(url) {

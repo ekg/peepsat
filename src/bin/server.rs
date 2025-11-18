@@ -2,7 +2,7 @@ use std::fs;
 use tiny_http::{Server, Response, Request, Header};
 
 fn handle_goes_proxy(request: Request) {
-    // Parse query string for timestamp parameter
+    // Parse query string for timestamp parameter (YYYY-MM-DD-HHMM format)
     let url = request.url();
     let timestamp = if let Some(pos) = url.find('?') {
         let query = &url[pos+1..];
@@ -14,9 +14,17 @@ fn handle_goes_proxy(request: Request) {
     };
 
     let target = if let Some(ts) = timestamp {
-        format!("https://cdn.star.nesdis.noaa.gov/GOES16/ABI/FD/GEOCOLOR/{}_GOES16-ABI-FD-GEOCOLOR-10848x10848.jpg", ts)
+        // Format: YYYY-MM-DD-HHMM -> https://mesonet.agron.iastate.edu/archive/data/YYYY/MM/DD/GIS/sat/conus_goes_ir4km_HHMM.tif
+        let parts: Vec<&str> = ts.split('-').collect();
+        if parts.len() == 4 {
+            // parts[0]=YYYY, parts[1]=MM, parts[2]=DD, parts[3]=HHMM
+            format!("https://mesonet.agron.iastate.edu/archive/data/{}/{}/{}/GIS/sat/conus_goes_ir4km_{}.tif",
+                parts[0], parts[1], parts[2], parts[3])
+        } else {
+            "https://cdn.star.nesdis.noaa.gov/GOES18/ABI/FD/GEOCOLOR/latest.jpg".to_string()
+        }
     } else {
-        "https://cdn.star.nesdis.noaa.gov/GOES16/ABI/FD/GEOCOLOR/latest.jpg".to_string()
+        "https://cdn.star.nesdis.noaa.gov/GOES18/ABI/FD/GEOCOLOR/latest.jpg".to_string()
     };
 
     println!("Fetching: {}", target);
@@ -28,7 +36,12 @@ fn handle_goes_proxy(request: Request) {
             println!("GOES proxy success: status={} len={}", status, bytes.len());
             let mut response = Response::from_data(bytes.to_vec());
             if status.is_success() {
-                response = response.with_header(Header::from_bytes("Content-Type", "image/jpeg").unwrap());
+                let content_type = if target.ends_with(".tif") {
+                    "image/tiff"
+                } else {
+                    "image/jpeg"
+                };
+                response = response.with_header(Header::from_bytes("Content-Type", content_type).unwrap());
             }
             let _ = request.respond(response);
         }
