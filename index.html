@@ -67,6 +67,13 @@
 </head>
 <body>
   <div id="controls">
+    <label>Satellite
+      <select id="satellite">
+        <option value="18">GOES-18 (West/Pacific)</option>
+        <option value="19">GOES-19 (East/Atlantic)</option>
+      </select>
+    </label>
+    <br>
     <label>Offset X <input id="offsetX" size="5"></label>
     <label>Offset Y <input id="offsetY" size="5"></label>
     <label>Zoom <input id="zoom" size="3"></label>
@@ -125,11 +132,13 @@
     let centerY = parseFloat(params.get('cy') || '0.5');
     let zoom = parseFloat(params.get('z') || '1');
     let hours = parseInt(params.get('h') || '3');
+    let satellite = params.get('sat') || '19'; // Default to GOES-19 (East)
 
     document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
     document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
     document.getElementById('zoom').value = String(zoom);
     document.getElementById('hours').value = hours;
+    document.getElementById('satellite').value = satellite;
 
     function updateUrl() {
       const p = new URLSearchParams();
@@ -137,6 +146,7 @@
       p.set('cy', centerY.toFixed(4));
       p.set('z', String(zoom));
       p.set('h', String(hours));
+      p.set('sat', satellite);
       history.replaceState(null, '', '?' + p.toString());
     }
 
@@ -191,7 +201,7 @@
       window.timestamps = generateTimestamps(hoursBack);
       window.currentFrame = -1;
 
-      log(`Loading ${window.timestamps.length} GeoColor images from GOES-18...`);
+      log(`Loading ${window.timestamps.length} GeoColor images from GOES-${satellite}...`);
 
       const MAX_CACHE_SIZE = 50;
       const framesToLoad = Math.min(window.timestamps.length, MAX_CACHE_SIZE);
@@ -202,7 +212,7 @@
         progressFill.style.width = `${((i + 1) / framesToLoad) * 100}%`;
 
         try {
-          const img = await loadImage(`/goes-proxy?t=${ts}`);
+          const img = await loadImage(`/goes-proxy?t=${ts}&sat=${satellite}`);
           window.imageCache.push(img);
           log(`Loaded ${ts}`);
 
@@ -279,7 +289,7 @@
 
       if (currentTs > latestTs) {
         try {
-          const img = await loadImage(`/goes-proxy?t=${currentTs}`);
+          const img = await loadImage(`/goes-proxy?t=${currentTs}&sat=${satellite}`);
           window.imageCache.push(img);
           window.timestamps.push(currentTs);
           // Remove oldest if cache too large
@@ -299,6 +309,7 @@
     // Event listeners
     document.getElementById('load').onclick = () => {
       hours = parseInt(document.getElementById('hours').value) || 3;
+      satellite = document.getElementById('satellite').value;
       pauseAnimation();
       updateUrl();
       loadImages(hours);
@@ -389,11 +400,133 @@
       drawImageToFit(img);
     });
 
+    // Touch support for mobile
+    let touchState = null;
+
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (window.imageCache.length === 0) return;
+
+      const touches = e.touches;
+      if (touches.length === 1) {
+        // Single touch - start drag
+        touchState = {
+          mode: 'drag',
+          lastX: touches[0].clientX,
+          lastY: touches[0].clientY
+        };
+      } else if (touches.length === 2) {
+        // Two touches - start pinch zoom
+        const dx = touches[1].clientX - touches[0].clientX;
+        const dy = touches[1].clientY - touches[0].clientY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const centerTouchX = (touches[0].clientX + touches[1].clientX) / 2;
+        const centerTouchY = (touches[0].clientY + touches[1].clientY) / 2;
+
+        touchState = {
+          mode: 'pinch',
+          lastDistance: distance,
+          centerX: centerTouchX,
+          centerY: centerTouchY
+        };
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (!touchState || window.imageCache.length === 0) return;
+
+      const touches = e.touches;
+
+      if (touchState.mode === 'drag' && touches.length === 1) {
+        // Handle drag
+        const dx = touches[0].clientX - touchState.lastX;
+        const dy = touches[0].clientY - touchState.lastY;
+        touchState.lastX = touches[0].clientX;
+        touchState.lastY = touches[0].clientY;
+
+        const img = window.imageCache[window.currentFrame];
+        if (!img) return;
+
+        const iw = img.naturalWidth;
+        const ih = img.naturalHeight;
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const base = Math.max(cw / iw, ch / ih);
+        const scale = base * Math.pow(2, zoom - 1);
+        centerX -= dx / (iw * scale);
+        centerY -= dy / (ih * scale);
+
+        document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
+        document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
+        updateUrl();
+        drawImageToFit(img);
+      } else if (touchState.mode === 'pinch' && touches.length === 2) {
+        // Handle pinch zoom
+        const dx = touches[1].clientX - touches[0].clientX;
+        const dy = touches[1].clientY - touches[0].clientY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const centerTouchX = (touches[0].clientX + touches[1].clientX) / 2;
+        const centerTouchY = (touches[0].clientY + touches[1].clientY) / 2;
+
+        const img = window.imageCache[window.currentFrame];
+        if (!img) return;
+
+        // Calculate zoom change based on distance change
+        const distanceRatio = distance / touchState.lastDistance;
+        const prevZoom = zoom;
+        zoom *= distanceRatio;
+        if (zoom < 1) zoom = 1;
+        if (zoom > 8) zoom = 8;
+
+        // Adjust center to zoom toward pinch center
+        const rect = canvas.getBoundingClientRect();
+        const mx = centerTouchX - rect.left;
+        const my = centerTouchY - rect.top;
+
+        const iw = img.naturalWidth;
+        const ih = img.naturalHeight;
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const base = Math.max(cw / iw, ch / ih);
+        const prevScale = base * Math.pow(2, prevZoom - 1);
+        const newScale = base * Math.pow(2, zoom - 1);
+        const imgX = (mx - (cw / 2 - centerX * iw * prevScale)) / (iw * prevScale);
+        const imgY = (my - (ch / 2 - centerY * ih * prevScale)) / (ih * prevScale);
+        centerX = imgX - (mx - cw / 2) / (iw * newScale);
+        centerY = imgY - (my - ch / 2) / (ih * newScale);
+
+        touchState.lastDistance = distance;
+        touchState.centerX = centerTouchX;
+        touchState.centerY = centerTouchY;
+
+        document.getElementById('zoom').value = String(zoom.toFixed(2));
+        document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
+        document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
+        updateUrl();
+        drawImageToFit(img);
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      if (e.touches.length === 0) {
+        touchState = null;
+      } else if (e.touches.length === 1 && touchState && touchState.mode === 'pinch') {
+        // Transition from pinch to drag
+        touchState = {
+          mode: 'drag',
+          lastX: e.touches[0].clientX,
+          lastY: e.touches[0].clientY
+        };
+      }
+    }, { passive: false });
+
     // Auto-load latest image on start
     async function loadLatestOnStart() {
-      log('Loading latest image...');
+      log(`Loading latest image from GOES-${satellite}...`);
       try {
-        const img = await loadImage('/goes-proxy');
+        const img = await loadImage(`/goes-proxy?sat=${satellite}`);
         window.imageCache.push(img);
         window.currentFrame = 0;
         drawImageToFit(img);
