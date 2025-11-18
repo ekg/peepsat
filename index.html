@@ -86,7 +86,6 @@
   </div>
   <div id="status"></div>
   <canvas id="canvas"></canvas>
-  <script src="./pkg/peepsat.js"></script>
   <script>
     const canvas = document.getElementById('canvas');
     const statusEl = document.getElementById('status');
@@ -100,6 +99,13 @@
     }
 
     const ctx = canvas.getContext('2d');
+
+    // Image cache and animation - declare early
+    let imageCache = [];
+    let timestamps = [];
+    let currentFrame = -1;
+    let isPlaying = false;
+    let animationInterval = null;
 
     function resize() {
       const oldW = canvas.width;
@@ -148,13 +154,6 @@
       ctx.imageSmoothingEnabled = zoom < 2;
       ctx.drawImage(img, dx, dy, iw * scale, ih * scale);
     }
-
-    // Image cache and animation
-    let imageCache = [];
-    let timestamps = [];
-    let currentFrame = -1;
-    let isPlaying = false;
-    let animationInterval = null;
 
     function updateFrameInfo() {
       document.getElementById('frameInfo').textContent =
@@ -397,9 +396,22 @@
       drawImageToFit(img);
     });
 
-    // Auto-load on start
-    log('Ready. Click Load to fetch images.');
-    loadImages(hours);
+    // Auto-load latest image on start
+    async function loadLatestOnStart() {
+      log('Loading latest image...');
+      try {
+        const img = await loadImage('/goes-proxy');
+        imageCache.push(img);
+        currentFrame = 0;
+        drawImageToFit(img);
+        updateFrameInfo();
+        log('Ready. Set hours and click Load to animate.');
+      } catch (err) {
+        log('Failed to load initial image: ' + err.message);
+        log('Click Load to try again.');
+      }
+    }
+    loadLatestOnStart();
   </script>
 </body>
 </html>
