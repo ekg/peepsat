@@ -162,49 +162,18 @@
     }
 
     function detectDiskRadius(img) {
-      // Simple radial search from center - disk is bright on black background
-      const tempCanvas = document.createElement('canvas');
+      // GOES full disk images have consistent geometry
+      // The Earth disk is centered and fills ~98% of the frame
       const w = img.naturalWidth;
       const h = img.naturalHeight;
-      tempCanvas.width = w;
-      tempCanvas.height = h;
-      const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(img, 0, 0);
 
-      const imageData = tempCtx.getImageData(0, 0, w, h);
-      const data = imageData.data;
-
-      const cx = w / 2;
-      const cy = h / 2;
-
-      // Sample along 8 directions to find where brightness drops to black
-      const angles = [0, Math.PI/4, Math.PI/2, 3*Math.PI/4, Math.PI, 5*Math.PI/4, 3*Math.PI/2, 7*Math.PI/4];
-      let radii = [];
-
-      for (let angle of angles) {
-        // Search outward from center along this angle
-        for (let r = Math.floor(w * 0.3); r < Math.floor(w * 0.6); r++) {
-          const x = Math.round(cx + r * Math.cos(angle));
-          const y = Math.round(cy + r * Math.sin(angle));
-
-          if (x < 0 || x >= w || y < 0 || y >= h) break;
-
-          const idx = (y * w + x) * 4;
-          const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-
-          // Found the edge where it transitions to black space
-          if (brightness < 15) {
-            radii.push(r);
-            break;
-          }
-        }
-      }
-
-      // Use the median radius to avoid outliers
-      radii.sort((a, b) => a - b);
-      const radius = radii.length > 0 ? radii[Math.floor(radii.length / 2)] : w * 0.49;
-
-      return { cx, cy, r: radius };
+      // Just use the known disk size for GOES satellites
+      // Disk radius is approximately 49% of image width
+      return {
+        cx: w / 2,
+        cy: h / 2,
+        r: w * 0.49
+      };
     }
 
     function drawImageToFit(img) {
