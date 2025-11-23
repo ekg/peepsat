@@ -410,6 +410,13 @@
     document.getElementById('play').onclick = playAnimation;
     document.getElementById('pause').onclick = pauseAnimation;
 
+    // Redraw when mask radius changes
+    document.getElementById('maskRadius').addEventListener('input', () => {
+      if (window.currentFrame >= 0 && window.imageCache[window.currentFrame]) {
+        drawImageToFit(window.imageCache[window.currentFrame]);
+      }
+    });
+
     document.getElementById('share').onclick = () => {
       const url = location.href;
       if (navigator.clipboard && navigator.clipboard.writeText) {
