@@ -200,12 +200,12 @@
 
       // Try different circle positions and radii
       let bestScore = 0;
-      let bestCircle = { cx: w / 2, cy: h / 2, r: w * 0.48 };
+      let bestCircle = { cx: w / 2, cy: h / 2, r: w * 0.49 };
 
       // Coarse search grid
       const centerStep = Math.floor(w / 20); // Sample every 5%
-      const radiusMin = Math.floor(w * 0.40);
-      const radiusMax = Math.floor(w * 0.55);
+      const radiusMin = Math.floor(w * 0.44);
+      const radiusMax = Math.floor(w * 0.52);
       const radiusStep = Math.floor(w / 50);
       const numSamples = 128; // More samples for accuracy
 
