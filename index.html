@@ -120,6 +120,7 @@
     window.currentFrame = -1;
     window.isPlaying = false;
     window.animationInterval = null;
+    window.diskRadiusCache = new Map(); // Cache detected disk radii
 
     function resize() {
       const oldW = canvas.width;
@@ -160,6 +161,37 @@
       history.replaceState(null, '', '?' + p.toString());
     }
 
+    function detectDiskRadius(img) {
+      // Sample the image to find the disk edge
+      // The Earth disk is centered and typically ~46% of image size
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = img.naturalWidth;
+      tempCanvas.height = img.naturalHeight;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(img, 0, 0);
+
+      const centerX = img.naturalWidth / 2;
+      const centerY = img.naturalHeight / 2;
+
+      // Sample along the horizontal centerline to find disk edge
+      const imageData = tempCtx.getImageData(0, centerY, img.naturalWidth, 1);
+      const data = imageData.data;
+
+      let radius = 0;
+      // Search from center outward for the edge (transition to black)
+      for (let x = Math.floor(centerX); x < img.naturalWidth; x++) {
+        const idx = x * 4;
+        const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+        if (brightness < 10) { // Found the edge (very dark)
+          radius = x - centerX;
+          break;
+        }
+      }
+
+      // If no edge found, use default 46% of image size
+      return radius > 0 ? radius : img.naturalWidth * 0.46;
+    }
+
     function drawImageToFit(img) {
       if (!img) return;
       const iw = img.naturalWidth;
@@ -173,6 +205,28 @@
       ctx.clearRect(0, 0, cw, ch);
       ctx.imageSmoothingEnabled = zoom < 2;
       ctx.drawImage(img, dx, dy, iw * scale, ih * scale);
+
+      // Apply circular mask to hide watermark and non-Earth regions
+      // Cache the disk radius per image
+      if (!window.diskRadiusCache.has(img)) {
+        window.diskRadiusCache.set(img, detectDiskRadius(img));
+      }
+      const diskRadius = window.diskRadiusCache.get(img);
+      const maskedRadius = diskRadius * scale;
+      const diskCenterX = dx + (iw / 2) * scale;
+      const diskCenterY = dy + (ih / 2) * scale;
+
+      // Draw black mask outside the disk
+      ctx.fillStyle = '#000';
+      ctx.save();
+      ctx.beginPath();
+      // Create path around entire canvas
+      ctx.rect(0, 0, cw, ch);
+      // Create circular hole for the Earth disk (subtract)
+      ctx.arc(diskCenterX, diskCenterY, maskedRadius, 0, Math.PI * 2, true);
+      ctx.clip('evenodd');
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.restore();
     }
 
     function updateFrameInfo() {
@@ -210,6 +264,7 @@
       window.imageCache = [];
       window.timestamps = generateTimestamps(hoursBack);
       window.currentFrame = -1;
+      window.diskRadiusCache.clear(); // Clear radius cache for new images
 
       log(`Loading ${window.timestamps.length} GeoColor images from GOES-${satellite}...`);
 
