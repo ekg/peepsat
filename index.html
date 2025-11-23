@@ -174,17 +174,27 @@
       const imageData = tempCtx.getImageData(0, 0, w, h);
       const data = imageData.data;
 
-      // Detect edges (brightness gradient)
-      const edges = new Uint8Array(w * h);
-      const threshold = 30;
-      for (let y = 1; y < h - 1; y++) {
-        for (let x = 1; x < w - 1; x++) {
+      // Detect edges - specifically looking for Earth/space boundary
+      const edges = new Float32Array(w * h);
+      for (let y = 2; y < h - 2; y++) {
+        for (let x = 2; x < w - 2; x++) {
           const idx = (y * w + x) * 4;
-          const b = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-          const bRight = (data[idx + 4] + data[idx + 5] + data[idx + 6]) / 3;
-          const bDown = (data[idx + w * 4] + data[idx + w * 4 + 1] + data[idx + w * 4 + 2]) / 3;
-          const gradient = Math.abs(bRight - b) + Math.abs(bDown - b);
-          edges[y * w + x] = gradient > threshold ? 1 : 0;
+
+          // Get brightness in 3x3 neighborhood for better gradient
+          let sum = 0;
+          let sumOuter = 0;
+          for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
+              const nidx = ((y + dy) * w + (x + dx)) * 4;
+              const b = (data[nidx] + data[nidx + 1] + data[nidx + 2]) / 3;
+              if (dx === 0 && dy === 0) sum += b;
+              else sumOuter += b;
+            }
+          }
+
+          // Strong gradient from bright (Earth) to dark (space)
+          const gradient = sum - sumOuter / 24;
+          edges[y * w + x] = Math.max(0, gradient / 255);
         }
       }
 
@@ -192,27 +202,47 @@
       let bestScore = 0;
       let bestCircle = { cx: w / 2, cy: h / 2, r: w * 0.48 };
 
-      // Search grid (coarse)
+      // Coarse search grid
       const centerStep = Math.floor(w / 20); // Sample every 5%
       const radiusMin = Math.floor(w * 0.40);
       const radiusMax = Math.floor(w * 0.55);
       const radiusStep = Math.floor(w / 50);
+      const numSamples = 128; // More samples for accuracy
 
+      const scoreCircle = (cx, cy, r) => {
+        let score = 0;
+        for (let i = 0; i < numSamples; i++) {
+          const angle = (i / numSamples) * Math.PI * 2;
+          const px = Math.round(cx + r * Math.cos(angle));
+          const py = Math.round(cy + r * Math.sin(angle));
+          if (px >= 2 && px < w - 2 && py >= 2 && py < h - 2) {
+            score += edges[py * w + px];
+          }
+        }
+        return score;
+      };
+
+      // Coarse pass
       for (let cy = h / 2 - centerStep * 2; cy <= h / 2 + centerStep * 2; cy += centerStep) {
         for (let cx = w / 2 - centerStep * 2; cx <= w / 2 + centerStep * 2; cx += centerStep) {
           for (let r = radiusMin; r <= radiusMax; r += radiusStep) {
-            // Score this circle by sampling points along its perimeter
-            let score = 0;
-            const numSamples = 64;
-            for (let i = 0; i < numSamples; i++) {
-              const angle = (i / numSamples) * Math.PI * 2;
-              const px = Math.round(cx + r * Math.cos(angle));
-              const py = Math.round(cy + r * Math.sin(angle));
-              if (px >= 0 && px < w && py >= 0 && py < h) {
-                score += edges[py * w + px];
-              }
+            const score = scoreCircle(cx, cy, r);
+            if (score > bestScore) {
+              bestScore = score;
+              bestCircle = { cx, cy, r };
             }
+          }
+        }
+      }
 
+      // Refinement pass - search around best circle with finer granularity
+      const fineStep = Math.floor(centerStep / 2);
+      const fineRadiusStep = Math.floor(radiusStep / 2);
+      for (let cy = bestCircle.cy - fineStep; cy <= bestCircle.cy + fineStep; cy += fineStep / 2) {
+        for (let cx = bestCircle.cx - fineStep; cx <= bestCircle.cx + fineStep; cx += fineStep / 2) {
+          for (let r = bestCircle.r - fineRadiusStep * 2; r <= bestCircle.r + fineRadiusStep * 2; r += fineRadiusStep / 2) {
+            if (r < radiusMin || r > radiusMax) continue;
+            const score = scoreCircle(cx, cy, r);
             if (score > bestScore) {
               bestScore = score;
               bestCircle = { cx, cy, r };
