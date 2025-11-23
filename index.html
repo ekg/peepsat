@@ -120,7 +120,7 @@
     window.currentFrame = -1;
     window.isPlaying = false;
     window.animationInterval = null;
-    window.diskRadiusCache = new Map(); // Cache detected disk radii
+    window.diskCircleCache = {}; // Cache detected disk per satellite: {satellite: {cx, cy, r}}
 
     function resize() {
       const oldW = canvas.width;
@@ -270,11 +270,13 @@
       ctx.drawImage(img, dx, dy, iw * scale, ih * scale);
 
       // Apply circular mask to hide watermark and non-Earth regions
-      // Cache the detected disk circle per image
-      if (!window.diskRadiusCache.has(img)) {
-        window.diskRadiusCache.set(img, detectDiskRadius(img));
+      // Detect disk circle once per satellite (geostationary = same position always)
+      if (!window.diskCircleCache[satellite]) {
+        log(`Detecting disk position for GOES-${satellite}...`);
+        window.diskCircleCache[satellite] = detectDiskRadius(img);
+        log(`Disk found: center=(${window.diskCircleCache[satellite].cx}, ${window.diskCircleCache[satellite].cy}), radius=${window.diskCircleCache[satellite].r}`);
       }
-      const diskCircle = window.diskRadiusCache.get(img);
+      const diskCircle = window.diskCircleCache[satellite];
       const maskedRadius = diskCircle.r * scale;
       const diskCenterX = dx + diskCircle.cx * scale;
       const diskCenterY = dy + diskCircle.cy * scale;
@@ -327,7 +329,6 @@
       window.imageCache = [];
       window.timestamps = generateTimestamps(hoursBack);
       window.currentFrame = -1;
-      window.diskRadiusCache.clear(); // Clear radius cache for new images
 
       log(`Loading ${window.timestamps.length} GeoColor images from GOES-${satellite}...`);
 
