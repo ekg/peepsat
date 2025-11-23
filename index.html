@@ -73,6 +73,13 @@
         <option value="19">GOES-19 (East/Atlantic)</option>
       </select>
     </label>
+    <label>Resolution
+      <select id="resolution">
+        <option value="1808x1808">1808 (Low)</option>
+        <option value="5424x5424" selected>5424 (High)</option>
+        <option value="10848x10848">10848 (Ultra)</option>
+      </select>
+    </label>
     <br>
     <label>Offset X <input id="offsetX" size="5"></label>
     <label>Offset Y <input id="offsetY" size="5"></label>
@@ -133,12 +140,14 @@
     let zoom = parseFloat(params.get('z') || '1');
     let hours = parseInt(params.get('h') || '3');
     let satellite = params.get('sat') || '19'; // Default to GOES-19 (East)
+    let resolution = params.get('res') || '5424x5424'; // Default to high res
 
     document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
     document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
     document.getElementById('zoom').value = String(zoom);
     document.getElementById('hours').value = hours;
     document.getElementById('satellite').value = satellite;
+    document.getElementById('resolution').value = resolution;
 
     function updateUrl() {
       const p = new URLSearchParams();
@@ -147,6 +156,7 @@
       p.set('z', String(zoom));
       p.set('h', String(hours));
       p.set('sat', satellite);
+      p.set('res', resolution);
       history.replaceState(null, '', '?' + p.toString());
     }
 
@@ -212,7 +222,7 @@
         progressFill.style.width = `${((i + 1) / framesToLoad) * 100}%`;
 
         try {
-          const img = await loadImage(`/goes-proxy?t=${ts}&sat=${satellite}`);
+          const img = await loadImage(`/goes-proxy?t=${ts}&sat=${satellite}&res=${resolution}`);
           window.imageCache.push(img);
           log(`Loaded ${ts}`);
 
@@ -289,7 +299,7 @@
 
       if (currentTs > latestTs) {
         try {
-          const img = await loadImage(`/goes-proxy?t=${currentTs}&sat=${satellite}`);
+          const img = await loadImage(`/goes-proxy?t=${currentTs}&sat=${satellite}&res=${resolution}`);
           window.imageCache.push(img);
           window.timestamps.push(currentTs);
           // Remove oldest if cache too large
@@ -310,6 +320,7 @@
     document.getElementById('load').onclick = () => {
       hours = parseInt(document.getElementById('hours').value) || 3;
       satellite = document.getElementById('satellite').value;
+      resolution = document.getElementById('resolution').value;
       pauseAnimation();
       updateUrl();
       loadImages(hours);
@@ -524,9 +535,9 @@
 
     // Auto-load latest image on start
     async function loadLatestOnStart() {
-      log(`Loading latest image from GOES-${satellite}...`);
+      log(`Loading latest image from GOES-${satellite} at ${resolution}...`);
       try {
-        const img = await loadImage(`/goes-proxy?sat=${satellite}`);
+        const img = await loadImage(`/goes-proxy?sat=${satellite}&res=${resolution}`);
         window.imageCache.push(img);
         window.currentFrame = 0;
         drawImageToFit(img);

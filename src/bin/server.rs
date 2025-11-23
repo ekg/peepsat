@@ -2,9 +2,9 @@ use std::fs;
 use tiny_http::{Server, Response, Request, Header};
 
 fn handle_goes_proxy(request: Request) {
-    // Parse query string for timestamp and satellite parameters
+    // Parse query string for timestamp, satellite, and resolution parameters
     let url = request.url();
-    let (timestamp, satellite) = if let Some(pos) = url.find('?') {
+    let (timestamp, satellite, resolution) = if let Some(pos) = url.find('?') {
         let query = &url[pos+1..];
         let ts = query.split('&')
             .find(|s| s.starts_with("t="))
@@ -13,14 +13,18 @@ fn handle_goes_proxy(request: Request) {
             .find(|s| s.starts_with("sat="))
             .and_then(|s| s.strip_prefix("sat="))
             .unwrap_or("18");
-        (ts, sat)
+        let res = query.split('&')
+            .find(|s| s.starts_with("res="))
+            .and_then(|s| s.strip_prefix("res="))
+            .unwrap_or("5424x5424");
+        (ts, sat, res)
     } else {
-        (None, "18")
+        (None, "18", "5424x5424")
     };
 
     let target = if let Some(ts) = timestamp {
-        // Format: YYYYDDDHHMM -> https://cdn.star.nesdis.noaa.gov/GOES{sat}/ABI/FD/GEOCOLOR/YYYYDDDHHMM_GOES{sat}-ABI-FD-GEOCOLOR-1808x1808.jpg
-        format!("https://cdn.star.nesdis.noaa.gov/GOES{}/ABI/FD/GEOCOLOR/{}_GOES{}-ABI-FD-GEOCOLOR-1808x1808.jpg", satellite, ts, satellite)
+        // Format: YYYYDDDHHMM -> https://cdn.star.nesdis.noaa.gov/GOES{sat}/ABI/FD/GEOCOLOR/YYYYDDDHHMM_GOES{sat}-ABI-FD-GEOCOLOR-{res}.jpg
+        format!("https://cdn.star.nesdis.noaa.gov/GOES{}/ABI/FD/GEOCOLOR/{}_GOES{}-ABI-FD-GEOCOLOR-{}.jpg", satellite, ts, satellite, resolution)
     } else {
         format!("https://cdn.star.nesdis.noaa.gov/GOES{}/ABI/FD/GEOCOLOR/latest.jpg", satellite)
     };
