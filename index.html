@@ -95,6 +95,7 @@
     <br>
     <label>Frame <span id="frameInfo">0/0</span></label>
     <button id="share">Share</button>
+    <label><input type="checkbox" id="autoUpdate" checked> Auto-update</label>
   </div>
   <div id="progress">
     <div id="progressText">Loading images...</div>
@@ -374,6 +375,8 @@
 
     // Periodic sync - check for new images every 10 minutes
     setInterval(async () => {
+      // Only auto-update if enabled and images are loaded
+      if (!document.getElementById('autoUpdate').checked) return;
       if (window.imageCache.length === 0) return;
 
       log('Checking for new images...');
@@ -415,6 +418,15 @@
     document.getElementById('maskRadius').addEventListener('input', () => {
       if (window.currentFrame >= 0 && window.imageCache[window.currentFrame]) {
         drawImageToFit(window.imageCache[window.currentFrame]);
+      }
+    });
+
+    // Auto-update toggle feedback
+    document.getElementById('autoUpdate').addEventListener('change', (e) => {
+      if (e.target.checked) {
+        log('Auto-update enabled: will check for new images every 10 minutes');
+      } else {
+        log('Auto-update disabled');
       }
     });
 
