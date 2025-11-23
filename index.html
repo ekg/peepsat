@@ -213,13 +213,10 @@
 
       log(`Loading ${window.timestamps.length} GeoColor images from GOES-${satellite}...`);
 
-      const MAX_CACHE_SIZE = 50;
-      const framesToLoad = Math.min(window.timestamps.length, MAX_CACHE_SIZE);
-
-      for (let i = 0; i < framesToLoad; i++) {
+      for (let i = 0; i < window.timestamps.length; i++) {
         const ts = window.timestamps[i];
-        progressText.textContent = `Loading image ${i + 1}/${framesToLoad}...`;
-        progressFill.style.width = `${((i + 1) / framesToLoad) * 100}%`;
+        progressText.textContent = `Loading image ${i + 1}/${window.timestamps.length}...`;
+        progressFill.style.width = `${((i + 1) / window.timestamps.length) * 100}%`;
 
         try {
           const img = await loadImage(`/goes-proxy?t=${ts}&sat=${satellite}&res=${resolution}`);
@@ -302,12 +299,6 @@
           const img = await loadImage(`/goes-proxy?t=${currentTs}&sat=${satellite}&res=${resolution}`);
           window.imageCache.push(img);
           window.timestamps.push(currentTs);
-          // Remove oldest if cache too large
-          if (window.imageCache.length > 50) {
-            window.imageCache.shift();
-            window.timestamps.shift();
-            if (window.currentFrame > 0) window.currentFrame--;
-          }
           log(`Added new image: ${currentTs}`);
           updateFrameInfo();
         } catch (err) {
