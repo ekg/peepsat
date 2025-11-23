@@ -162,7 +162,7 @@
     }
 
     function detectDiskRadius(img) {
-      // Use circle convolution to find the best-fitting disk
+      // Simple radial search from center - disk is bright on black background
       const tempCanvas = document.createElement('canvas');
       const w = img.naturalWidth;
       const h = img.naturalHeight;
@@ -174,85 +174,37 @@
       const imageData = tempCtx.getImageData(0, 0, w, h);
       const data = imageData.data;
 
-      // Detect edges - specifically looking for Earth/space boundary
-      const edges = new Float32Array(w * h);
-      for (let y = 2; y < h - 2; y++) {
-        for (let x = 2; x < w - 2; x++) {
+      const cx = w / 2;
+      const cy = h / 2;
+
+      // Sample along 8 directions to find where brightness drops to black
+      const angles = [0, Math.PI/4, Math.PI/2, 3*Math.PI/4, Math.PI, 5*Math.PI/4, 3*Math.PI/2, 7*Math.PI/4];
+      let radii = [];
+
+      for (let angle of angles) {
+        // Search outward from center along this angle
+        for (let r = Math.floor(w * 0.3); r < Math.floor(w * 0.6); r++) {
+          const x = Math.round(cx + r * Math.cos(angle));
+          const y = Math.round(cy + r * Math.sin(angle));
+
+          if (x < 0 || x >= w || y < 0 || y >= h) break;
+
           const idx = (y * w + x) * 4;
+          const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
 
-          // Get brightness in 3x3 neighborhood for better gradient
-          let sum = 0;
-          let sumOuter = 0;
-          for (let dy = -2; dy <= 2; dy++) {
-            for (let dx = -2; dx <= 2; dx++) {
-              const nidx = ((y + dy) * w + (x + dx)) * 4;
-              const b = (data[nidx] + data[nidx + 1] + data[nidx + 2]) / 3;
-              if (dx === 0 && dy === 0) sum += b;
-              else sumOuter += b;
-            }
-          }
-
-          // Strong gradient from bright (Earth) to dark (space)
-          const gradient = sum - sumOuter / 24;
-          edges[y * w + x] = Math.max(0, gradient / 255);
-        }
-      }
-
-      // Try different circle positions and radii
-      let bestScore = 0;
-      let bestCircle = { cx: w / 2, cy: h / 2, r: w * 0.49 };
-
-      // Coarse search grid
-      const centerStep = Math.floor(w / 20); // Sample every 5%
-      const radiusMin = Math.floor(w * 0.44);
-      const radiusMax = Math.floor(w * 0.52);
-      const radiusStep = Math.floor(w / 50);
-      const numSamples = 128; // More samples for accuracy
-
-      const scoreCircle = (cx, cy, r) => {
-        let score = 0;
-        for (let i = 0; i < numSamples; i++) {
-          const angle = (i / numSamples) * Math.PI * 2;
-          const px = Math.round(cx + r * Math.cos(angle));
-          const py = Math.round(cy + r * Math.sin(angle));
-          if (px >= 2 && px < w - 2 && py >= 2 && py < h - 2) {
-            score += edges[py * w + px];
-          }
-        }
-        return score;
-      };
-
-      // Coarse pass
-      for (let cy = h / 2 - centerStep * 2; cy <= h / 2 + centerStep * 2; cy += centerStep) {
-        for (let cx = w / 2 - centerStep * 2; cx <= w / 2 + centerStep * 2; cx += centerStep) {
-          for (let r = radiusMin; r <= radiusMax; r += radiusStep) {
-            const score = scoreCircle(cx, cy, r);
-            if (score > bestScore) {
-              bestScore = score;
-              bestCircle = { cx, cy, r };
-            }
+          // Found the edge where it transitions to black space
+          if (brightness < 15) {
+            radii.push(r);
+            break;
           }
         }
       }
 
-      // Refinement pass - search around best circle with finer granularity
-      const fineStep = Math.floor(centerStep / 2);
-      const fineRadiusStep = Math.floor(radiusStep / 2);
-      for (let cy = bestCircle.cy - fineStep; cy <= bestCircle.cy + fineStep; cy += fineStep / 2) {
-        for (let cx = bestCircle.cx - fineStep; cx <= bestCircle.cx + fineStep; cx += fineStep / 2) {
-          for (let r = bestCircle.r - fineRadiusStep * 2; r <= bestCircle.r + fineRadiusStep * 2; r += fineRadiusStep / 2) {
-            if (r < radiusMin || r > radiusMax) continue;
-            const score = scoreCircle(cx, cy, r);
-            if (score > bestScore) {
-              bestScore = score;
-              bestCircle = { cx, cy, r };
-            }
-          }
-        }
-      }
+      // Use the median radius to avoid outliers
+      radii.sort((a, b) => a - b);
+      const radius = radii.length > 0 ? radii[Math.floor(radii.length / 2)] : w * 0.49;
 
-      // Store both radius and center offset for mask positioning
-      return bestCircle;
+      return { cx, cy, r: radius };
     }
 
     function drawImageToFit(img) {
