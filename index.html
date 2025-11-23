@@ -162,34 +162,67 @@
     }
 
     function detectDiskRadius(img) {
-      // Sample the image to find the disk edge
-      // The Earth disk is centered and typically ~46% of image size
+      // Use circle convolution to find the best-fitting disk
       const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = img.naturalWidth;
-      tempCanvas.height = img.naturalHeight;
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      tempCanvas.width = w;
+      tempCanvas.height = h;
       const tempCtx = tempCanvas.getContext('2d');
       tempCtx.drawImage(img, 0, 0);
 
-      const centerX = img.naturalWidth / 2;
-      const centerY = img.naturalHeight / 2;
-
-      // Sample along the horizontal centerline to find disk edge
-      const imageData = tempCtx.getImageData(0, centerY, img.naturalWidth, 1);
+      const imageData = tempCtx.getImageData(0, 0, w, h);
       const data = imageData.data;
 
-      let radius = 0;
-      // Search from center outward for the edge (transition to black)
-      for (let x = Math.floor(centerX); x < img.naturalWidth; x++) {
-        const idx = x * 4;
-        const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-        if (brightness < 10) { // Found the edge (very dark)
-          radius = x - centerX;
-          break;
+      // Detect edges (brightness gradient)
+      const edges = new Uint8Array(w * h);
+      const threshold = 30;
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const idx = (y * w + x) * 4;
+          const b = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+          const bRight = (data[idx + 4] + data[idx + 5] + data[idx + 6]) / 3;
+          const bDown = (data[idx + w * 4] + data[idx + w * 4 + 1] + data[idx + w * 4 + 2]) / 3;
+          const gradient = Math.abs(bRight - b) + Math.abs(bDown - b);
+          edges[y * w + x] = gradient > threshold ? 1 : 0;
         }
       }
 
-      // If no edge found, use default 46% of image size
-      return radius > 0 ? radius : img.naturalWidth * 0.46;
+      // Try different circle positions and radii
+      let bestScore = 0;
+      let bestCircle = { cx: w / 2, cy: h / 2, r: w * 0.46 };
+
+      // Search grid (coarse)
+      const centerStep = Math.floor(w / 20); // Sample every 5%
+      const radiusMin = Math.floor(w * 0.35);
+      const radiusMax = Math.floor(w * 0.50);
+      const radiusStep = Math.floor(w / 40);
+
+      for (let cy = h / 2 - centerStep * 2; cy <= h / 2 + centerStep * 2; cy += centerStep) {
+        for (let cx = w / 2 - centerStep * 2; cx <= w / 2 + centerStep * 2; cx += centerStep) {
+          for (let r = radiusMin; r <= radiusMax; r += radiusStep) {
+            // Score this circle by sampling points along its perimeter
+            let score = 0;
+            const numSamples = 64;
+            for (let i = 0; i < numSamples; i++) {
+              const angle = (i / numSamples) * Math.PI * 2;
+              const px = Math.round(cx + r * Math.cos(angle));
+              const py = Math.round(cy + r * Math.sin(angle));
+              if (px >= 0 && px < w && py >= 0 && py < h) {
+                score += edges[py * w + px];
+              }
+            }
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestCircle = { cx, cy, r };
+            }
+          }
+        }
+      }
+
+      // Store both radius and center offset for mask positioning
+      return bestCircle;
     }
 
     function drawImageToFit(img) {
@@ -207,14 +240,14 @@
       ctx.drawImage(img, dx, dy, iw * scale, ih * scale);
 
       // Apply circular mask to hide watermark and non-Earth regions
-      // Cache the disk radius per image
+      // Cache the detected disk circle per image
       if (!window.diskRadiusCache.has(img)) {
         window.diskRadiusCache.set(img, detectDiskRadius(img));
       }
-      const diskRadius = window.diskRadiusCache.get(img);
-      const maskedRadius = diskRadius * scale;
-      const diskCenterX = dx + (iw / 2) * scale;
-      const diskCenterY = dy + (ih / 2) * scale;
+      const diskCircle = window.diskRadiusCache.get(img);
+      const maskedRadius = diskCircle.r * scale;
+      const diskCenterX = dx + diskCircle.cx * scale;
+      const diskCenterY = dy + diskCircle.cy * scale;
 
       // Draw black mask outside the disk
       ctx.fillStyle = '#000';
