@@ -339,7 +339,7 @@
       const prevZoom = zoom;
       const step = 0.25;
       zoom += (e.deltaY < 0 ? step : -step);
-      if (zoom < 1) zoom = 1;
+      if (zoom < 0.1) zoom = 0.1;
       if (zoom > 8) zoom = 8;
 
       const img = window.imageCache[window.currentFrame];
@@ -478,7 +478,7 @@
         const distanceRatio = distance / touchState.lastDistance;
         const prevZoom = zoom;
         zoom *= distanceRatio;
-        if (zoom < 1) zoom = 1;
+        if (zoom < 0.1) zoom = 0.1;
         if (zoom > 8) zoom = 8;
 
         // Adjust center to zoom toward pinch center
