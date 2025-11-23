@@ -80,6 +80,7 @@
         <option value="10848x10848">10848 (Ultra)</option>
       </select>
     </label>
+    <label>Mask %<input id="maskRadius" type="number" min="30" max="55" step="0.5" value="auto" size="4"></label>
     <br>
     <label>Offset X <input id="offsetX" size="5"></label>
     <label>Offset Y <input id="offsetY" size="5"></label>
@@ -162,18 +163,50 @@
     }
 
     function detectDiskRadius(img) {
-      // GOES full disk images have consistent geometry
-      // The Earth disk is centered and fills ~98% of the frame
+      // Search from outside-in to find where Earth disk begins
+      const tempCanvas = document.createElement('canvas');
       const w = img.naturalWidth;
       const h = img.naturalHeight;
+      tempCanvas.width = w;
+      tempCanvas.height = h;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(img, 0, 0);
 
-      // Just use the known disk size for GOES satellites
-      // Disk radius is approximately 49% of image width
-      return {
-        cx: w / 2,
-        cy: h / 2,
-        r: w * 0.49
-      };
+      const imageData = tempCtx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+
+      const cx = w / 2;
+      const cy = h / 2;
+
+      // Sample along 16 directions from outside in
+      const numAngles = 16;
+      let radii = [];
+
+      for (let i = 0; i < numAngles; i++) {
+        const angle = (i / numAngles) * Math.PI * 2;
+        // Start from outside, move toward center
+        for (let r = Math.floor(w * 0.52); r > Math.floor(w * 0.35); r--) {
+          const x = Math.round(cx + r * Math.cos(angle));
+          const y = Math.round(cy + r * Math.sin(angle));
+
+          if (x < 0 || x >= w || y < 0 || y >= h) continue;
+
+          const idx = (y * w + x) * 4;
+          const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+
+          // Found where Earth begins (transition from black to bright)
+          if (brightness > 20) {
+            radii.push(r);
+            break;
+          }
+        }
+      }
+
+      // Use median of detected radii
+      radii.sort((a, b) => a - b);
+      const radius = radii.length > 0 ? radii[Math.floor(radii.length / 2)] : w * 0.49;
+
+      return { cx, cy, r: radius };
     }
 
     function drawImageToFit(img) {
@@ -195,9 +228,18 @@
       if (!window.diskCircleCache[satellite]) {
         log(`Detecting disk position for GOES-${satellite}...`);
         window.diskCircleCache[satellite] = detectDiskRadius(img);
-        log(`Disk found: center=(${window.diskCircleCache[satellite].cx}, ${window.diskCircleCache[satellite].cy}), radius=${window.diskCircleCache[satellite].r}`);
+        const pct = ((window.diskCircleCache[satellite].r / iw) * 100).toFixed(1);
+        log(`Disk detected: radius=${window.diskCircleCache[satellite].r}px (${pct}% of image width)`);
+        log(`To hardcode: GOES-${satellite} mask = ${pct}%`);
       }
-      const diskCircle = window.diskCircleCache[satellite];
+
+      // Allow manual override of mask radius
+      const maskInput = document.getElementById('maskRadius').value;
+      let diskCircle = window.diskCircleCache[satellite];
+      if (maskInput !== 'auto' && !isNaN(parseFloat(maskInput))) {
+        const manualPct = parseFloat(maskInput) / 100;
+        diskCircle = { cx: iw / 2, cy: ih / 2, r: iw * manualPct };
+      }
       const maskedRadius = diskCircle.r * scale;
       const diskCenterX = dx + diskCircle.cx * scale;
       const diskCenterY = dy + diskCircle.cy * scale;
