@@ -223,14 +223,16 @@
           window.imageCache.push(img);
           log(`Loaded ${ts}`);
 
-          if (i === 0) {
-            window.currentFrame = 0;
+          if (window.currentFrame === -1) {
+            // First successful image - set as current frame
+            window.currentFrame = i;
             drawImageToFit(img);
             updateFrameInfo();
           }
         } catch (err) {
           log(`Failed to load ${ts}: ${err.message}`);
-          // Try to continue with next image
+          // Push null to maintain alignment with timestamps array
+          window.imageCache.push(null);
         }
       }
 
@@ -264,7 +266,13 @@
       if (window.animationInterval) clearInterval(window.animationInterval);
 
       window.animationInterval = setInterval(() => {
-        window.currentFrame = (window.currentFrame + 1) % window.imageCache.length;
+        // Advance to next frame, skipping null entries
+        let attempts = 0;
+        do {
+          window.currentFrame = (window.currentFrame + 1) % window.imageCache.length;
+          attempts++;
+        } while (window.imageCache[window.currentFrame] === null && attempts < window.imageCache.length);
+
         drawImageToFit(window.imageCache[window.currentFrame]);
         updateFrameInfo();
       }, 1000 / fps);
