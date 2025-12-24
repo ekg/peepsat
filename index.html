@@ -63,9 +63,40 @@
       transition: width 0.3s;
     }
     canvas { width: 100vw; height: 100vh; display: block; background: #000; }
+    #frameBar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      display: flex;
+      z-index: 20;
+      background: rgba(0,0,0,0.5);
+    }
+    #frameBar .frame-segment {
+      flex: 1;
+      height: 100%;
+      background: rgba(255,255,255,0.2);
+      transition: background 0.2s;
+    }
+    #frameBar .frame-segment.loaded {
+      background: rgba(255,255,255,0.9);
+    }
+    #frameBar .frame-segment.current {
+      background: #4CAF50;
+    }
+    #frameBar .frame-segment.loading {
+      background: rgba(255,255,255,0.5);
+      animation: pulse 0.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
+    }
   </style>
 </head>
 <body>
+  <div id="frameBar"></div>
   <div id="controls">
     <label>Satellite
       <select id="satellite">
@@ -149,6 +180,8 @@
     let hours = parseInt(params.get('h') || '3');
     let satellite = params.get('sat') || '19'; // Default to GOES-19 (East)
     let resolution = params.get('res') || '5424x5424'; // Default to high res
+    let fps = parseInt(params.get('fps') || '5');
+    let tileMode = params.get('tiles') === '1';
 
     document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
     document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
@@ -156,6 +189,8 @@
     document.getElementById('hours').value = hours;
     document.getElementById('satellite').value = satellite;
     document.getElementById('resolution').value = resolution;
+    document.getElementById('fps').value = fps;
+    document.getElementById('tileMode').checked = tileMode;
 
     function updateUrl() {
       const p = new URLSearchParams();
@@ -165,6 +200,10 @@
       p.set('h', String(hours));
       p.set('sat', satellite);
       p.set('res', resolution);
+      p.set('fps', String(fps));
+      if (document.getElementById('tileMode').checked) {
+        p.set('tiles', '1');
+      }
       history.replaceState(null, '', '?' + p.toString());
     }
 
@@ -268,9 +307,51 @@
       if (isTileMode) {
         document.getElementById('frameInfo').textContent =
           `${window.currentTileFrame + 1}/${window.sliderTimestamps.length}`;
+        updateFrameBar(window.currentTileFrame, window.sliderTimestamps.length);
       } else {
         document.getElementById('frameInfo').textContent =
           `${window.currentFrame + 1}/${window.imageCache.length}`;
+        updateFrameBar(window.currentFrame, window.imageCache.length);
+      }
+    }
+
+    // Frame progress bar management
+    const frameBar = document.getElementById('frameBar');
+    window.frameLoadStatus = [];  // Track which frames are loaded
+
+    function initFrameBar(numFrames) {
+      frameBar.innerHTML = '';
+      window.frameLoadStatus = new Array(numFrames).fill(false);
+      for (let i = 0; i < numFrames; i++) {
+        const seg = document.createElement('div');
+        seg.className = 'frame-segment';
+        seg.dataset.frame = i;
+        frameBar.appendChild(seg);
+      }
+    }
+
+    function setFrameLoading(frameIdx) {
+      const seg = frameBar.children[frameIdx];
+      if (seg) seg.className = 'frame-segment loading';
+    }
+
+    function setFrameLoaded(frameIdx) {
+      window.frameLoadStatus[frameIdx] = true;
+      const seg = frameBar.children[frameIdx];
+      if (seg) seg.className = 'frame-segment loaded';
+    }
+
+    function updateFrameBar(currentIdx, total) {
+      if (frameBar.children.length !== total) return;
+      for (let i = 0; i < total; i++) {
+        const seg = frameBar.children[i];
+        if (i === currentIdx) {
+          seg.className = 'frame-segment current';
+        } else if (window.frameLoadStatus[i]) {
+          seg.className = 'frame-segment loaded';
+        } else {
+          seg.className = 'frame-segment';
+        }
       }
     }
 
@@ -534,7 +615,7 @@
       window.sliderTimestamps = [];
       window.currentTileFrame = -1;
 
-      log(`Fetching RAMMB SLIDER metadata for GOES-${satellite}...`);
+      log(`Fetching RAMMB SLIDER metadata for ${satellite}...`);
       const meta = await fetchSliderMetadata(satellite);
 
       if (!meta.timestamps.length || !meta.dates.length) {
@@ -560,13 +641,44 @@
 
       log(`Prepared ${window.sliderTimestamps.length} frames from SLIDER`);
 
-      // Load first frame
+      // Initialize frame bar
+      initFrameBar(window.sliderTimestamps.length);
+
+      // Load first frame immediately
       progressText.textContent = 'Loading first frame...';
-      progressFill.style.width = '50%';
+      progressFill.style.width = '10%';
+      setFrameLoading(0);
       await loadTilesForFrame(0);
+      setFrameLoaded(0);
 
       progressEl.style.display = 'none';
-      log(`Ready. ${window.sliderTimestamps.length} frames available.`);
+      log(`Ready. Loading remaining ${window.sliderTimestamps.length - 1} frames in background...`);
+
+      // Load remaining frames in background
+      loadRemainingFrames();
+    }
+
+    async function loadRemainingFrames() {
+      const config = TILE_CONFIG[satellite];
+      if (!config) return;
+
+      const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
+
+      for (let i = 1; i < window.sliderTimestamps.length; i++) {
+        if (window.frameLoadStatus[i]) continue;  // Already loaded
+
+        setFrameLoading(i);
+        const frame = window.sliderTimestamps[i];
+        const tiles = getVisibleTiles(centerX, centerY, zoom, canvas.width, canvas.height, sliderZoom, satellite);
+
+        // Prefetch tiles for this frame (just load into cache, don't draw)
+        await Promise.all(
+          tiles.map(t => loadTile(satellite, frame.timestamp, frame.date, t.x, t.y, sliderZoom).catch(() => null))
+        );
+
+        setFrameLoaded(i);
+      }
+      log('All frames loaded.');
     }
 
     async function loadLatestTile() {
@@ -591,6 +703,10 @@
       window.sliderTimestamps = [{ timestamp: latest, date: latestDate }];
       window.currentTileFrame = 0;
 
+      // Initialize frame bar with single frame
+      initFrameBar(1);
+      setFrameLoading(0);
+
       // Select best zoom level
       const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
       const zoomConfig = getZoomConfig(satellite, sliderZoom);
@@ -606,6 +722,7 @@
       );
 
       drawTilesToCanvas(tiles, tileImages, satellite, sliderZoom);
+      setFrameLoaded(0);
       updateFrameInfo();
       log('Tile load complete.');
     }
@@ -738,6 +855,15 @@
       } else {
         log('Auto-update disabled');
       }
+    });
+
+    document.getElementById('fps').addEventListener('change', (e) => {
+      fps = parseInt(e.target.value) || 5;
+      updateUrl();
+    });
+
+    document.getElementById('tileMode').addEventListener('change', (e) => {
+      updateUrl();
     });
 
     document.getElementById('share').onclick = () => {
@@ -988,8 +1114,10 @@
       // Non-GOES satellites require tile mode
       const isGOES = satellite === '18' || satellite === '19';
 
-      if (!isGOES) {
-        log(`${satellite} requires tile mode - enabling automatically`);
+      if (!isGOES || tileMode) {
+        if (!isGOES) {
+          log(`${satellite} requires tile mode - enabling automatically`);
+        }
         document.getElementById('tileMode').checked = true;
         return loadLatestTile();
       }
@@ -1011,10 +1139,25 @@
     // Update global satellite variable when dropdown changes
     document.getElementById('satellite').addEventListener('change', (e) => {
       satellite = e.target.value;
+      updateUrl();
+
+      // Clear caches when switching satellites
+      window.imageCache = [];
+      window.sliderTimestamps = [];
+      window.tileCache = {};
+      window.diskCircleCache = {};
+
       const isGOES = satellite === '18' || satellite === '19';
-      if (!isGOES && !document.getElementById('tileMode').checked) {
-        log(`${satellite} requires tile mode - click Load to fetch tiles`);
+      if (!isGOES) {
         document.getElementById('tileMode').checked = true;
+        log(`Switched to ${satellite} (tile mode)`);
+        loadLatestTile();
+      } else if (document.getElementById('tileMode').checked) {
+        log(`Switched to GOES-${satellite} (tile mode)`);
+        loadLatestTile();
+      } else {
+        log(`Switched to GOES-${satellite}`);
+        loadLatestOnStart();
       }
     });
 

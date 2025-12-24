@@ -20,6 +20,7 @@ image = "0.24"
 bytemuck = "1.0"
 tiny_http = "0.12"
 reqwest = { version = "0.12", features = ["blocking"] }
+lazy_static = "1.4"
 
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "CanvasRenderingContext2d"] }
 
