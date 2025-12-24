@@ -551,7 +551,7 @@
       const dy = ch / 2 - centerY * fullSize * scale;
 
       ctx.clearRect(0, 0, cw, ch);
-      ctx.imageSmoothingEnabled = zoom < 2;
+      ctx.imageSmoothingEnabled = true;
 
       // Draw each tile at its position
       for (let i = 0; i < tiles.length; i++) {
@@ -584,7 +584,65 @@
       ctx.restore();
     }
 
-    async function loadTilesForFrame(frameIdx) {
+    // Progressive drawing: use cached low-res tiles as fallback, then load high-res
+    function drawWithFallback(sat, timestamp, date, targetZoom) {
+      const config = TILE_CONFIG[sat];
+      if (!config) return;
+
+      const cw = canvas.width;
+      const ch = canvas.height;
+
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.imageSmoothingEnabled = true;
+
+      // Try each zoom level from lowest to target, draw whatever we have cached
+      for (let z = 0; z <= targetZoom; z++) {
+        const zoomConfig = getZoomConfig(sat, z);
+        const { fullSize, tileSize, gridSize } = zoomConfig;
+        const base = Math.max(cw / fullSize, ch / fullSize);
+        const scale = base * Math.pow(2, zoom - 1);
+        const dx = cw / 2 - centerX * fullSize * scale;
+        const dy = ch / 2 - centerY * fullSize * scale;
+
+        // Check which tiles from this zoom level we have cached
+        for (let col = 0; col < gridSize; col++) {
+          for (let row = 0; row < gridSize; row++) {
+            const key = `${sat}_${timestamp}_z${z}_${col}_${row}`;
+            const img = window.tileCache[key];
+            if (img) {
+              const tileX = dx + col * tileSize * scale;
+              const tileY = dy + row * tileSize * scale;
+              const tileW = tileSize * scale;
+              const tileH = tileSize * scale;
+              ctx.drawImage(img, tileX, tileY, tileW, tileH);
+            }
+          }
+        }
+      }
+
+      // Apply circular mask
+      const targetConfig = getZoomConfig(sat, targetZoom);
+      const fullSize = targetConfig.fullSize;
+      const base = Math.max(cw / fullSize, ch / fullSize);
+      const scale = base * Math.pow(2, zoom - 1);
+      const dx = cw / 2 - centerX * fullSize * scale;
+      const dy = ch / 2 - centerY * fullSize * scale;
+      const maskPct = parseFloat(document.getElementById('maskRadius').value) / 100;
+      const diskRadius = fullSize * maskPct * scale;
+      const diskCenterX = dx + (fullSize / 2) * scale;
+      const diskCenterY = dy + (fullSize / 2) * scale;
+
+      ctx.fillStyle = '#000';
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, cw, ch);
+      ctx.arc(diskCenterX, diskCenterY, diskRadius, 0, Math.PI * 2, true);
+      ctx.clip('evenodd');
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.restore();
+    }
+
+    async function loadTilesForFrame(frameIdx, silent = false) {
       if (frameIdx < 0 || frameIdx >= window.sliderTimestamps.length) return;
 
       const frame = window.sliderTimestamps[frameIdx];
@@ -598,16 +656,44 @@
       const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
       const zoomConfig = getZoomConfig(satellite, sliderZoom);
 
-      const tiles = getVisibleTiles(centerX, centerY, zoom, canvas.width, canvas.height, sliderZoom, satellite);
-      log(`Frame ${frameIdx + 1}: ${tiles.length} tiles at zoom ${sliderZoom} (${zoomConfig.fullSize}px)`);
-
-      const tileImages = await Promise.all(
-        tiles.map(t => loadTile(satellite, frame.timestamp, frame.date, t.x, t.y, sliderZoom).catch(() => null))
-      );
-
-      drawTilesToCanvas(tiles, tileImages, satellite, sliderZoom);
+      // Immediately draw whatever is cached (progressive display)
       window.currentTileFrame = frameIdx;
+      drawWithFallback(satellite, frame.timestamp, frame.date, sliderZoom);
       updateFrameInfo();
+
+      const tiles = getVisibleTiles(centerX, centerY, zoom, canvas.width, canvas.height, sliderZoom, satellite);
+      if (!silent) {
+        log(`Frame ${frameIdx + 1}: ${tiles.length} tiles at zoom ${sliderZoom} (${zoomConfig.fullSize}px)`);
+      }
+
+      // Load tiles progressively and redraw as each arrives
+      let loaded = 0;
+      const loadPromises = tiles.map(async (t) => {
+        const key = `${satellite}_${frame.timestamp}_z${sliderZoom}_${t.x}_${t.y}`;
+        if (window.tileCache[key]) {
+          loaded++;
+          return window.tileCache[key];
+        }
+
+        try {
+          const img = await loadTile(satellite, frame.timestamp, frame.date, t.x, t.y, sliderZoom);
+          loaded++;
+          // Redraw after each tile (if we're still on this frame)
+          if (window.currentTileFrame === frameIdx) {
+            drawWithFallback(satellite, frame.timestamp, frame.date, sliderZoom);
+          }
+          return img;
+        } catch (e) {
+          return null;
+        }
+      });
+
+      await Promise.all(loadPromises);
+
+      // Final redraw with all tiles
+      if (window.currentTileFrame === frameIdx) {
+        drawWithFallback(satellite, frame.timestamp, frame.date, sliderZoom);
+      }
     }
 
     async function loadTileAnimation(hoursBack) {
@@ -644,11 +730,22 @@
       // Initialize frame bar
       initFrameBar(window.sliderTimestamps.length);
 
-      // Load first frame immediately
+      // First: load zoom level 0 (single tile) for ALL frames quickly as fallback
+      progressText.textContent = 'Loading thumbnails...';
+      progressFill.style.width = '5%';
+      log('Preloading zoom-0 thumbnails for all frames...');
+
+      const thumbPromises = window.sliderTimestamps.map((frame, idx) =>
+        loadTile(satellite, frame.timestamp, frame.date, 0, 0, 0).catch(() => null)
+      );
+      await Promise.all(thumbPromises);
+      log('Thumbnails loaded - animation ready with fallback');
+
+      // Load first frame at full resolution
       progressText.textContent = 'Loading first frame...';
-      progressFill.style.width = '10%';
+      progressFill.style.width = '20%';
       setFrameLoading(0);
-      await loadTilesForFrame(0);
+      await loadTilesForFrame(0, true);
       setFrameLoaded(0);
 
       progressEl.style.display = 'none';
@@ -707,21 +804,30 @@
       initFrameBar(1);
       setFrameLoading(0);
 
-      // Select best zoom level
+      // First load zoom-0 thumbnail for immediate display
+      log('Loading thumbnail...');
+      try {
+        await loadTile(satellite, latest, latestDate, 0, 0, 0);
+        drawWithFallback(satellite, latest, latestDate, 0);
+      } catch (e) {}
+
+      // Then load full resolution progressively
       const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
       const zoomConfig = getZoomConfig(satellite, sliderZoom);
 
       const tiles = getVisibleTiles(centerX, centerY, zoom, canvas.width, canvas.height, sliderZoom, satellite);
-      log(`Loading ${tiles.length} tiles at zoom ${sliderZoom} (${zoomConfig.fullSize}px, max: ${zoomConfig.gridSize}x${zoomConfig.gridSize})...`);
+      log(`Loading ${tiles.length} tiles at zoom ${sliderZoom} (${zoomConfig.fullSize}px)...`);
 
-      const tileImages = await Promise.all(
-        tiles.map(t => loadTile(satellite, latest, latestDate, t.x, t.y, sliderZoom).catch(e => {
+      // Load tiles progressively, redrawing as each arrives
+      for (const t of tiles) {
+        try {
+          await loadTile(satellite, latest, latestDate, t.x, t.y, sliderZoom);
+          drawWithFallback(satellite, latest, latestDate, sliderZoom);
+        } catch (e) {
           log(`Tile (${t.x},${t.y}) failed`);
-          return null;
-        }))
-      );
+        }
+      }
 
-      drawTilesToCanvas(tiles, tileImages, satellite, sliderZoom);
       setFrameLoaded(0);
       updateFrameInfo();
       log('Tile load complete.');
@@ -731,11 +837,45 @@
     let tileRefreshTimeout = null;
     function scheduleRefreshTileView() {
       if (!document.getElementById('tileMode').checked) return;
-      if (window.currentTileFrame < 0) return;
+      if (window.currentTileFrame < 0 || window.sliderTimestamps.length === 0) return;
+
+      // IMMEDIATELY draw whatever we have cached at any zoom level
+      const frame = window.sliderTimestamps[window.currentTileFrame];
+      const targetZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
+      drawWithFallback(satellite, frame.timestamp, frame.date, targetZoom);
+
+      // Then debounce the actual high-res tile loading
       if (tileRefreshTimeout) clearTimeout(tileRefreshTimeout);
       tileRefreshTimeout = setTimeout(() => {
-        loadTilesForFrame(window.currentTileFrame);
-      }, 150);  // Debounce 150ms
+        loadTilesProgressively(window.currentTileFrame);
+      }, 100);  // Debounce 100ms
+    }
+
+    // Load tiles progressively - load visible tiles and redraw as each arrives
+    async function loadTilesProgressively(frameIdx) {
+      if (frameIdx < 0 || frameIdx >= window.sliderTimestamps.length) return;
+
+      const frame = window.sliderTimestamps[frameIdx];
+      const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
+      const tiles = getVisibleTiles(centerX, centerY, zoom, canvas.width, canvas.height, sliderZoom, satellite);
+
+      // Load each tile and redraw as it arrives
+      const loadPromises = tiles.map(async (t) => {
+        const key = `${satellite}_${frame.timestamp}_z${sliderZoom}_${t.x}_${t.y}`;
+        if (window.tileCache[key]) return; // Already cached
+
+        try {
+          await loadTile(satellite, frame.timestamp, frame.date, t.x, t.y, sliderZoom);
+          // Redraw immediately after each tile loads
+          if (window.currentTileFrame === frameIdx) {
+            drawWithFallback(satellite, frame.timestamp, frame.date, sliderZoom);
+          }
+        } catch (e) {
+          // Ignore failed tiles
+        }
+      });
+
+      await Promise.all(loadPromises);
     }
 
     async function refreshTileView() {
@@ -765,10 +905,16 @@
       if (window.animationInterval) clearInterval(window.animationInterval);
 
       if (isTileMode) {
-        // Tile mode animation
+        // Tile mode animation - use progressive loading for smooth playback
         window.animationInterval = setInterval(async () => {
           window.currentTileFrame = (window.currentTileFrame + 1) % window.sliderTimestamps.length;
-          await loadTilesForFrame(window.currentTileFrame);
+          const frame = window.sliderTimestamps[window.currentTileFrame];
+          const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
+          // Draw immediately with cached tiles
+          drawWithFallback(satellite, frame.timestamp, frame.date, sliderZoom);
+          updateFrameInfo();
+          // Load any missing tiles in background (don't await, let animation continue)
+          loadTilesProgressively(window.currentTileFrame);
         }, 1000 / fps);
       } else {
         // Full image mode animation
