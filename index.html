@@ -69,8 +69,11 @@
   <div id="controls">
     <label>Satellite
       <select id="satellite">
-        <option value="18">GOES-18 (West/Pacific)</option>
         <option value="19">GOES-19 (East/Atlantic)</option>
+        <option value="18">GOES-18 (West/Pacific)</option>
+        <option value="himawari">Himawari (Asia/Pacific)</option>
+        <option value="meteosat9">Meteosat-9 (Indian Ocean)</option>
+        <option value="meteosat10">Meteosat-10 (Africa/Europe)</option>
       </select>
     </label>
     <label>Resolution
@@ -96,6 +99,7 @@
     <label>Frame <span id="frameInfo">0/0</span></label>
     <button id="share">Share</button>
     <label><input type="checkbox" id="autoUpdate" checked> Auto-update</label>
+    <label><input type="checkbox" id="tileMode"> Tile mode</label>
   </div>
   <div id="progress">
     <div id="progressText">Loading images...</div>
@@ -260,8 +264,14 @@
     }
 
     function updateFrameInfo() {
-      document.getElementById('frameInfo').textContent =
-        `${window.currentFrame + 1}/${window.imageCache.length}`;
+      const isTileMode = document.getElementById('tileMode').checked;
+      if (isTileMode) {
+        document.getElementById('frameInfo').textContent =
+          `${window.currentTileFrame + 1}/${window.sliderTimestamps.length}`;
+      } else {
+        document.getElementById('frameInfo').textContent =
+          `${window.currentFrame + 1}/${window.imageCache.length}`;
+      }
     }
 
     function generateTimestamps(hoursBack) {
@@ -338,10 +348,298 @@
       });
     }
 
-    function playAnimation() {
-      if (window.imageCache.length === 0) {
-        log('No images loaded. Click Load first.');
+    // ===== TILE MODE =====
+    // RAMMB SLIDER tile system from satpaper
+    // Tile sizes and zoom levels vary by satellite type
+
+    // Satellite configurations
+    const TILE_CONFIG = {
+      // GOES: 678px tiles, max zoom 4 (16x16 = 256 tiles, 10848px full disk)
+      '18': { tileSize: 678, maxZoom: 4 },
+      '19': { tileSize: 678, maxZoom: 4 },
+      // Meteosat: 464px tiles, max zoom 3 (8x8 = 64 tiles, 3712px full disk)
+      'meteosat9': { tileSize: 464, maxZoom: 3 },
+      'meteosat10': { tileSize: 464, maxZoom: 3 },
+      // Himawari: 688px tiles, max zoom 4
+      'himawari': { tileSize: 688, maxZoom: 4 },
+    };
+
+    // Get zoom level config for a satellite
+    function getZoomConfig(sat, zoomLevel) {
+      const config = TILE_CONFIG[sat];
+      if (!config) return null;
+      const gridSize = Math.pow(2, zoomLevel);
+      return {
+        gridSize: gridSize,
+        fullSize: gridSize * config.tileSize,
+        tileSize: config.tileSize
+      };
+    }
+
+    // Get best zoom level based on viewport zoom
+    function getBestZoomLevel(viewportZoom, canvasW, canvasH, sat) {
+      const config = TILE_CONFIG[sat];
+      if (!config) return 0;
+
+      const fullDiskPixels = Math.max(canvasW, canvasH);
+      const neededPixels = fullDiskPixels * Math.pow(2, viewportZoom - 1);
+
+      // Find the smallest zoom level that provides enough pixels
+      for (let z = 0; z <= config.maxZoom; z++) {
+        const zoomConfig = getZoomConfig(sat, z);
+        if (zoomConfig.fullSize >= neededPixels * 0.8) {
+          return z;
+        }
+      }
+      return config.maxZoom;
+    }
+
+    window.tileCache = {};  // Cache tiles: { "sat_timestamp_x_y": Image }
+    window.sliderTimestamps = [];  // { timestamp, date } objects
+    window.currentTileFrame = -1;
+
+    async function fetchSliderMetadata(sat) {
+      const [latestResp, datesResp] = await Promise.all([
+        fetch(`/slider-latest?sat=${sat}`),
+        fetch(`/slider-dates?sat=${sat}`)
+      ]);
+      const latest = await latestResp.json();
+      const dates = await datesResp.json();
+      return {
+        timestamps: latest.timestamps_int || [],
+        dates: dates.dates_int || []
+      };
+    }
+
+    function getVisibleTiles(centerX, centerY, viewportZoom, canvasW, canvasH, sliderZoom, sat) {
+      // Get config for this slider zoom level and satellite
+      const zoomConfig = getZoomConfig(sat, sliderZoom);
+      if (!zoomConfig) return [];
+      const { fullSize, gridSize, tileSize } = zoomConfig;
+
+      // Calculate visible region based on viewport zoom
+      const base = Math.max(canvasW / fullSize, canvasH / fullSize);
+      const scale = base * Math.pow(2, viewportZoom - 1);
+
+      // Visible region in image pixels
+      const visW = canvasW / scale;
+      const visH = canvasH / scale;
+      const visLeft = centerX * fullSize - visW / 2;
+      const visTop = centerY * fullSize - visH / 2;
+      const visRight = visLeft + visW;
+      const visBottom = visTop + visH;
+
+      // Convert to tile coordinates (clamp to 0..gridSize-1)
+      const tileLeft = Math.max(0, Math.floor(visLeft / tileSize));
+      const tileTop = Math.max(0, Math.floor(visTop / tileSize));
+      const tileRight = Math.min(gridSize - 1, Math.floor(visRight / tileSize));
+      const tileBottom = Math.min(gridSize - 1, Math.floor(visBottom / tileSize));
+
+      const tiles = [];
+      for (let x = tileLeft; x <= tileRight; x++) {
+        for (let y = tileTop; y <= tileBottom; y++) {
+          tiles.push({ x, y });
+        }
+      }
+      return tiles;
+    }
+
+    async function loadTile(sat, timestamp, date, col, row, sliderZoom) {
+      // col/row are canvas coordinates, but SLIDER URL uses row_col naming (x=row, y=col)
+      const key = `${sat}_${timestamp}_z${sliderZoom}_${col}_${row}`;
+      if (window.tileCache[key]) return window.tileCache[key];
+
+      const dateStr = String(date).padStart(8, '0');
+      // Swap: URL x = row, URL y = col
+      const url = `/slider-tile?sat=${sat}&t=${timestamp}&d=${dateStr}&x=${row}&y=${col}&z=${sliderZoom}`;
+      const img = await loadImage(url);
+      window.tileCache[key] = img;
+      return img;
+    }
+
+    function drawTilesToCanvas(tiles, tileImages, sat, sliderZoom) {
+      const zoomConfig = getZoomConfig(sat, sliderZoom);
+      if (!zoomConfig) return;
+      const { fullSize, tileSize } = zoomConfig;
+
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const base = Math.max(cw / fullSize, ch / fullSize);
+      const scale = base * Math.pow(2, zoom - 1);
+      const dx = cw / 2 - centerX * fullSize * scale;
+      const dy = ch / 2 - centerY * fullSize * scale;
+
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.imageSmoothingEnabled = zoom < 2;
+
+      // Draw each tile at its position
+      for (let i = 0; i < tiles.length; i++) {
+        const tile = tiles[i];
+        const img = tileImages[i];
+        if (!img) continue;
+
+        // tile.x = column, tile.y = row (canvas coordinates)
+        const tileX = dx + tile.x * tileSize * scale;
+        const tileY = dy + tile.y * tileSize * scale;
+        const tileW = tileSize * scale;
+        const tileH = tileSize * scale;
+
+        ctx.drawImage(img, tileX, tileY, tileW, tileH);
+      }
+
+      // Apply circular mask (same as full image mode)
+      const maskPct = parseFloat(document.getElementById('maskRadius').value) / 100;
+      const diskRadius = fullSize * maskPct * scale;
+      const diskCenterX = dx + (fullSize / 2) * scale;
+      const diskCenterY = dy + (fullSize / 2) * scale;
+
+      ctx.fillStyle = '#000';
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, cw, ch);
+      ctx.arc(diskCenterX, diskCenterY, diskRadius, 0, Math.PI * 2, true);
+      ctx.clip('evenodd');
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.restore();
+    }
+
+    async function loadTilesForFrame(frameIdx) {
+      if (frameIdx < 0 || frameIdx >= window.sliderTimestamps.length) return;
+
+      const frame = window.sliderTimestamps[frameIdx];
+      const config = TILE_CONFIG[satellite];
+      if (!config) {
+        log(`Tile mode not supported for satellite ${satellite}`);
         return;
+      }
+
+      // Select best zoom level based on viewport zoom
+      const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
+      const zoomConfig = getZoomConfig(satellite, sliderZoom);
+
+      const tiles = getVisibleTiles(centerX, centerY, zoom, canvas.width, canvas.height, sliderZoom, satellite);
+      log(`Frame ${frameIdx + 1}: ${tiles.length} tiles at zoom ${sliderZoom} (${zoomConfig.fullSize}px)`);
+
+      const tileImages = await Promise.all(
+        tiles.map(t => loadTile(satellite, frame.timestamp, frame.date, t.x, t.y, sliderZoom).catch(() => null))
+      );
+
+      drawTilesToCanvas(tiles, tileImages, satellite, sliderZoom);
+      window.currentTileFrame = frameIdx;
+      updateFrameInfo();
+    }
+
+    async function loadTileAnimation(hoursBack) {
+      progressEl.style.display = 'block';
+      window.sliderTimestamps = [];
+      window.currentTileFrame = -1;
+
+      log(`Fetching RAMMB SLIDER metadata for GOES-${satellite}...`);
+      const meta = await fetchSliderMetadata(satellite);
+
+      if (!meta.timestamps.length || !meta.dates.length) {
+        log('Failed to fetch SLIDER metadata');
+        progressEl.style.display = 'none';
+        return;
+      }
+
+      // SLIDER timestamps are sorted newest-first
+      // We need to pair each timestamp with its date (use most recent date for all)
+      const framesNeeded = hoursBack * 6;  // 6 frames per hour (10 min intervals)
+      const available = Math.min(framesNeeded, meta.timestamps.length);
+      const currentDate = meta.dates[0];  // Most recent date
+
+      // Take the most recent N timestamps (they're at the start of the array)
+      // But reverse so animation plays oldest to newest
+      for (let i = available - 1; i >= 0; i--) {
+        window.sliderTimestamps.push({
+          timestamp: meta.timestamps[i],
+          date: currentDate
+        });
+      }
+
+      log(`Prepared ${window.sliderTimestamps.length} frames from SLIDER`);
+
+      // Load first frame
+      progressText.textContent = 'Loading first frame...';
+      progressFill.style.width = '50%';
+      await loadTilesForFrame(0);
+
+      progressEl.style.display = 'none';
+      log(`Ready. ${window.sliderTimestamps.length} frames available.`);
+    }
+
+    async function loadLatestTile() {
+      const config = TILE_CONFIG[satellite];
+      if (!config) {
+        log(`Tile mode not available for satellite ${satellite}, using full image`);
+        document.getElementById('tileMode').checked = false;
+        return loadLatestOnStart();
+      }
+
+      log(`Fetching latest SLIDER timestamp for ${satellite}...`);
+      const meta = await fetchSliderMetadata(satellite);
+
+      if (!meta.timestamps.length) {
+        log('Failed to fetch SLIDER metadata');
+        return;
+      }
+
+      // Arrays are sorted newest-first, so index 0 is most recent
+      const latest = meta.timestamps[0];
+      const latestDate = meta.dates[0];
+      window.sliderTimestamps = [{ timestamp: latest, date: latestDate }];
+      window.currentTileFrame = 0;
+
+      // Select best zoom level
+      const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
+      const zoomConfig = getZoomConfig(satellite, sliderZoom);
+
+      const tiles = getVisibleTiles(centerX, centerY, zoom, canvas.width, canvas.height, sliderZoom, satellite);
+      log(`Loading ${tiles.length} tiles at zoom ${sliderZoom} (${zoomConfig.fullSize}px, max: ${zoomConfig.gridSize}x${zoomConfig.gridSize})...`);
+
+      const tileImages = await Promise.all(
+        tiles.map(t => loadTile(satellite, latest, latestDate, t.x, t.y, sliderZoom).catch(e => {
+          log(`Tile (${t.x},${t.y}) failed`);
+          return null;
+        }))
+      );
+
+      drawTilesToCanvas(tiles, tileImages, satellite, sliderZoom);
+      updateFrameInfo();
+      log('Tile load complete.');
+    }
+
+    // Redraw tiles when view changes (for tile mode)
+    let tileRefreshTimeout = null;
+    function scheduleRefreshTileView() {
+      if (!document.getElementById('tileMode').checked) return;
+      if (window.currentTileFrame < 0) return;
+      if (tileRefreshTimeout) clearTimeout(tileRefreshTimeout);
+      tileRefreshTimeout = setTimeout(() => {
+        loadTilesForFrame(window.currentTileFrame);
+      }, 150);  // Debounce 150ms
+    }
+
+    async function refreshTileView() {
+      if (!document.getElementById('tileMode').checked) return;
+      if (window.currentTileFrame < 0) return;
+      await loadTilesForFrame(window.currentTileFrame);
+    }
+
+    function playAnimation() {
+      const isTileMode = document.getElementById('tileMode').checked;
+
+      if (isTileMode) {
+        if (window.sliderTimestamps.length === 0) {
+          log('No tiles loaded. Click Load first.');
+          return;
+        }
+      } else {
+        if (window.imageCache.length === 0) {
+          log('No images loaded. Click Load first.');
+          return;
+        }
       }
 
       window.isPlaying = true;
@@ -349,17 +647,25 @@
 
       if (window.animationInterval) clearInterval(window.animationInterval);
 
-      window.animationInterval = setInterval(() => {
-        // Advance to next frame, skipping null entries
-        let attempts = 0;
-        do {
-          window.currentFrame = (window.currentFrame + 1) % window.imageCache.length;
-          attempts++;
-        } while (window.imageCache[window.currentFrame] === null && attempts < window.imageCache.length);
+      if (isTileMode) {
+        // Tile mode animation
+        window.animationInterval = setInterval(async () => {
+          window.currentTileFrame = (window.currentTileFrame + 1) % window.sliderTimestamps.length;
+          await loadTilesForFrame(window.currentTileFrame);
+        }, 1000 / fps);
+      } else {
+        // Full image mode animation
+        window.animationInterval = setInterval(() => {
+          let attempts = 0;
+          do {
+            window.currentFrame = (window.currentFrame + 1) % window.imageCache.length;
+            attempts++;
+          } while (window.imageCache[window.currentFrame] === null && attempts < window.imageCache.length);
 
-        drawImageToFit(window.imageCache[window.currentFrame]);
-        updateFrameInfo();
-      }, 1000 / fps);
+          drawImageToFit(window.imageCache[window.currentFrame]);
+          updateFrameInfo();
+        }, 1000 / fps);
+      }
 
       log(`Playing animation at ${fps} FPS`);
     }
@@ -408,7 +714,11 @@
       resolution = document.getElementById('resolution').value;
       pauseAnimation();
       updateUrl();
-      loadImages(hours);
+      if (document.getElementById('tileMode').checked) {
+        loadTileAnimation(hours);
+      } else {
+        loadImages(hours);
+      }
     };
 
     document.getElementById('play').onclick = playAnimation;
@@ -441,7 +751,10 @@
     // Wheel zoom (same as before but preserves animation state)
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      if (window.imageCache.length === 0) return;
+      const isTileMode = document.getElementById('tileMode').checked;
+
+      if (!isTileMode && window.imageCache.length === 0) return;
+      if (isTileMode && window.sliderTimestamps.length === 0) return;
 
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -452,11 +765,22 @@
       if (zoom < 0.1) zoom = 0.1;
       if (zoom > 8) zoom = 8;
 
-      const img = window.imageCache[window.currentFrame];
-      if (!img) return;
+      // Get dimensions from image or tile config
+      let iw, ih;
+      if (isTileMode) {
+        const config = TILE_CONFIG[satellite];
+        if (!config) return;
+        // Use max zoom level for coordinate calculations
+        const zoomConfig = getZoomConfig(satellite, config.maxZoom);
+        iw = zoomConfig.fullSize;
+        ih = zoomConfig.fullSize;
+      } else {
+        const img = window.imageCache[window.currentFrame];
+        if (!img) return;
+        iw = img.naturalWidth;
+        ih = img.naturalHeight;
+      }
 
-      const iw = img.naturalWidth;
-      const ih = img.naturalHeight;
       const cw = canvas.width;
       const ch = canvas.height;
       const base = Math.max(cw / iw, ch / ih);
@@ -471,7 +795,11 @@
       document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
       document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
       updateUrl();
-      drawImageToFit(img);
+      if (isTileMode) {
+        scheduleRefreshTileView();
+      } else {
+        drawImageToFit(window.imageCache[window.currentFrame]);
+      }
     }, { passive: false });
 
     // Pan (dragging)
@@ -488,17 +816,33 @@
     window.addEventListener('mouseup', () => { dragging = false; });
 
     window.addEventListener('mousemove', (e) => {
-      if (!dragging || window.imageCache.length === 0) return;
+      if (!dragging) return;
+      const isTileMode = document.getElementById('tileMode').checked;
+
+      if (!isTileMode && window.imageCache.length === 0) return;
+      if (isTileMode && window.sliderTimestamps.length === 0) return;
+
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
 
-      const img = window.imageCache[window.currentFrame];
-      if (!img) return;
+      // Get dimensions from image or tile config
+      let iw, ih;
+      if (isTileMode) {
+        const config = TILE_CONFIG[satellite];
+        if (!config) return;
+        // Use max zoom level for coordinate calculations
+        const zoomConfig = getZoomConfig(satellite, config.maxZoom);
+        iw = zoomConfig.fullSize;
+        ih = zoomConfig.fullSize;
+      } else {
+        const img = window.imageCache[window.currentFrame];
+        if (!img) return;
+        iw = img.naturalWidth;
+        ih = img.naturalHeight;
+      }
 
-      const iw = img.naturalWidth;
-      const ih = img.naturalHeight;
       const cw = canvas.width;
       const ch = canvas.height;
       const base = Math.max(cw / iw, ch / ih);
@@ -509,7 +853,12 @@
       document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
       document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
       updateUrl();
-      drawImageToFit(img);
+
+      if (isTileMode) {
+        scheduleRefreshTileView();
+      } else {
+        drawImageToFit(window.imageCache[window.currentFrame]);
+      }
     });
 
     // Touch support for mobile
@@ -636,6 +985,15 @@
 
     // Auto-load latest image on start
     async function loadLatestOnStart() {
+      // Non-GOES satellites require tile mode
+      const isGOES = satellite === '18' || satellite === '19';
+
+      if (!isGOES) {
+        log(`${satellite} requires tile mode - enabling automatically`);
+        document.getElementById('tileMode').checked = true;
+        return loadLatestTile();
+      }
+
       log(`Loading latest image from GOES-${satellite} at ${resolution}...`);
       try {
         const img = await loadImage(`/goes-proxy?sat=${satellite}&res=${resolution}`);
@@ -649,6 +1007,17 @@
         log('Click Load to try again.');
       }
     }
+
+    // Update global satellite variable when dropdown changes
+    document.getElementById('satellite').addEventListener('change', (e) => {
+      satellite = e.target.value;
+      const isGOES = satellite === '18' || satellite === '19';
+      if (!isGOES && !document.getElementById('tileMode').checked) {
+        log(`${satellite} requires tile mode - click Load to fetch tiles`);
+        document.getElementById('tileMode').checked = true;
+      }
+    });
+
     loadLatestOnStart();
   </script>
 </body>
