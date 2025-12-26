@@ -23,6 +23,12 @@ lazy_static::lazy_static! {
         cache_dir
     };
     static ref CACHE_INDEX: Mutex<HashMap<String, CacheEntry>> = Mutex::new(HashMap::new());
+    // HTTP client that follows redirects
+    static ref HTTP_CLIENT: reqwest::blocking::Client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap();
 }
 
 fn cache_key(sat: &str, timestamp: &str, zoom: u32, x: u32, y: u32) -> String {
@@ -154,7 +160,7 @@ fn handle_slider_latest(request: Request) {
     );
 
     println!("Fetching latest times: {}", target);
-    match reqwest::blocking::get(&target) {
+    match HTTP_CLIENT.get(&target).send() {
         Ok(r) => {
             let bytes = r.bytes().unwrap_or_default();
             let response = Response::from_data(bytes.to_vec())
@@ -186,7 +192,7 @@ fn handle_slider_dates(request: Request) {
     );
 
     println!("Fetching available dates: {}", target);
-    match reqwest::blocking::get(&target) {
+    match HTTP_CLIENT.get(&target).send() {
         Ok(r) => {
             let bytes = r.bytes().unwrap_or_default();
             let response = Response::from_data(bytes.to_vec())
@@ -252,7 +258,7 @@ fn handle_slider_tile(request: Request) {
     );
 
     println!("Fetching tile ({}, {}) z{}: {}", x, y, zoom, target);
-    match reqwest::blocking::get(&target) {
+    match HTTP_CLIENT.get(&target).send() {
         Ok(r) => {
             let status = r.status();
             let bytes = r.bytes().unwrap_or_default();
@@ -307,7 +313,7 @@ fn handle_goes_proxy(request: Request) {
     };
 
     println!("Fetching: {}", target);
-    let resp = reqwest::blocking::get(&target);
+    let resp = HTTP_CLIENT.get(&target).send();
     match resp {
         Ok(r) => {
             let status = r.status();
