@@ -132,7 +132,14 @@
     <label><input type="checkbox" id="autoUpdate" checked> Auto-update</label>
     <label><input type="checkbox" id="tileMode"> Tile mode</label>
     <br>
-    <label>CDN <input id="cdnUrl" type="text" size="40" value="https://rammb-slider.cira.colostate.edu"></label>
+    <label>CDN
+      <select id="cdnSelect">
+        <option value="https://rammb-slider.cira.colostate.edu">rammb-slider.cira.colostate.edu</option>
+        <option value="https://slider.cira.colostate.edu">slider.cira.colostate.edu</option>
+        <option value="custom">Custom...</option>
+      </select>
+    </label>
+    <input id="cdnUrl" type="text" size="30" value="https://rammb-slider.cira.colostate.edu" style="display:none">
   </div>
   <div id="progress">
     <div id="progressText">Loading images...</div>
@@ -195,6 +202,28 @@
     document.getElementById('fps').value = fps;
     document.getElementById('tileMode').checked = tileMode;
     document.getElementById('cdnUrl').value = cdnUrl;
+
+    // Set CDN dropdown to match URL param
+    const cdnSelect = document.getElementById('cdnSelect');
+    const cdnUrlInput = document.getElementById('cdnUrl');
+    const knownCdns = Array.from(cdnSelect.options).map(o => o.value).filter(v => v !== 'custom');
+    if (knownCdns.includes(cdnUrl)) {
+      cdnSelect.value = cdnUrl;
+    } else {
+      cdnSelect.value = 'custom';
+      cdnUrlInput.style.display = 'inline';
+    }
+
+    // Handle CDN dropdown changes
+    cdnSelect.addEventListener('change', (e) => {
+      if (e.target.value === 'custom') {
+        cdnUrlInput.style.display = 'inline';
+      } else {
+        cdnUrlInput.style.display = 'none';
+        cdnUrlInput.value = e.target.value;
+      }
+      updateUrl();
+    });
 
     function updateUrl() {
       const p = new URLSearchParams();
