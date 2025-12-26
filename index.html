@@ -131,6 +131,8 @@
     <button id="share">Share</button>
     <label><input type="checkbox" id="autoUpdate" checked> Auto-update</label>
     <label><input type="checkbox" id="tileMode"> Tile mode</label>
+    <br>
+    <label>CDN <input id="cdnUrl" type="text" size="40" value="https://rammb-slider.cira.colostate.edu"></label>
   </div>
   <div id="progress">
     <div id="progressText">Loading images...</div>
@@ -182,6 +184,7 @@
     let resolution = params.get('res') || '5424x5424'; // Default to high res
     let fps = parseInt(params.get('fps') || '5');
     let tileMode = params.get('tiles') === '1';
+    let cdnUrl = params.get('cdn') || 'https://rammb-slider.cira.colostate.edu';
 
     document.getElementById('offsetX').value = (centerX * 100).toFixed(2);
     document.getElementById('offsetY').value = (centerY * 100).toFixed(2);
@@ -191,6 +194,7 @@
     document.getElementById('resolution').value = resolution;
     document.getElementById('fps').value = fps;
     document.getElementById('tileMode').checked = tileMode;
+    document.getElementById('cdnUrl').value = cdnUrl;
 
     function updateUrl() {
       const p = new URLSearchParams();
@@ -203,6 +207,10 @@
       p.set('fps', String(fps));
       if (document.getElementById('tileMode').checked) {
         p.set('tiles', '1');
+      }
+      const currentCdn = document.getElementById('cdnUrl').value;
+      if (currentCdn !== 'https://rammb-slider.cira.colostate.edu') {
+        p.set('cdn', currentCdn);
       }
       history.replaceState(null, '', '?' + p.toString());
     }
@@ -480,9 +488,10 @@
     window.currentTileFrame = -1;
 
     async function fetchSliderMetadata(sat) {
+      const cdn = encodeURIComponent(document.getElementById('cdnUrl').value);
       const [latestResp, datesResp] = await Promise.all([
-        fetch(`/slider-latest?sat=${sat}`),
-        fetch(`/slider-dates?sat=${sat}`)
+        fetch(`/slider-latest?sat=${sat}&cdn=${cdn}`),
+        fetch(`/slider-dates?sat=${sat}&cdn=${cdn}`)
       ]);
       const latest = await latestResp.json();
       const dates = await datesResp.json();
@@ -531,8 +540,9 @@
       if (window.tileCache[key]) return window.tileCache[key];
 
       const dateStr = String(date).padStart(8, '0');
+      const cdn = encodeURIComponent(document.getElementById('cdnUrl').value);
       // Swap: URL x = row, URL y = col
-      const url = `/slider-tile?sat=${sat}&t=${timestamp}&d=${dateStr}&x=${row}&y=${col}&z=${sliderZoom}`;
+      const url = `/slider-tile?sat=${sat}&t=${timestamp}&d=${dateStr}&x=${row}&y=${col}&z=${sliderZoom}&cdn=${cdn}`;
       const img = await loadImage(url);
       window.tileCache[key] = img;
       return img;

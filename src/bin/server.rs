@@ -143,20 +143,29 @@ fn satellite_max_zoom(sat: &str) -> u32 {
     }
 }
 
+fn get_query_param<'a>(url: &'a str, name: &str) -> Option<String> {
+    url.find('?')
+        .map(|pos| &url[pos+1..])
+        .and_then(|query| {
+            query.split('&')
+                .find(|s| s.starts_with(&format!("{}=", name)))
+                .and_then(|s| s.strip_prefix(&format!("{}=", name)))
+                .map(|s| urlencoding::decode(s).unwrap_or_default().into_owned())
+        })
+}
+
+fn get_cdn_url(url: &str) -> String {
+    get_query_param(url, "cdn").unwrap_or_else(|| SLIDER_BASE_URL.to_string())
+}
+
 fn handle_slider_latest(request: Request) {
     let url = request.url();
-    let sat = if let Some(pos) = url.find('?') {
-        url[pos+1..].split('&')
-            .find(|s| s.starts_with("sat="))
-            .and_then(|s| s.strip_prefix("sat="))
-            .unwrap_or("19")
-    } else {
-        "19"
-    };
+    let sat = get_query_param(url, "sat").unwrap_or_else(|| "19".to_string());
+    let cdn = get_cdn_url(url);
 
     let target = format!(
         "{}/data/json/{}/full_disk/geocolor/latest_times.json",
-        SLIDER_BASE_URL, satellite_id(sat)
+        cdn, satellite_id(&sat)
     );
 
     println!("Fetching latest times: {}", target);
@@ -177,18 +186,12 @@ fn handle_slider_latest(request: Request) {
 
 fn handle_slider_dates(request: Request) {
     let url = request.url();
-    let sat = if let Some(pos) = url.find('?') {
-        url[pos+1..].split('&')
-            .find(|s| s.starts_with("sat="))
-            .and_then(|s| s.strip_prefix("sat="))
-            .unwrap_or("19")
-    } else {
-        "19"
-    };
+    let sat = get_query_param(url, "sat").unwrap_or_else(|| "19".to_string());
+    let cdn = get_cdn_url(url);
 
     let target = format!(
         "{}/data/json/{}/full_disk/geocolor/available_dates.json",
-        SLIDER_BASE_URL, satellite_id(sat)
+        cdn, satellite_id(&sat)
     );
 
     println!("Fetching available dates: {}", target);
@@ -208,29 +211,22 @@ fn handle_slider_dates(request: Request) {
 }
 
 fn handle_slider_tile(request: Request) {
-    // Parse: /slider-tile?sat=19&t=20231026153000&x=7&y=8&z=4
+    // Parse: /slider-tile?sat=19&t=20231026153000&x=7&y=8&z=4&cdn=...
     let url = request.url();
-    let query = url.find('?').map(|p| &url[p+1..]).unwrap_or("");
-
-    let get_param = |name: &str| -> Option<&str> {
-        query.split('&')
-            .find(|s| s.starts_with(&format!("{}=", name)))
-            .and_then(|s| s.strip_prefix(&format!("{}=", name)))
-    };
-
-    let sat = get_param("sat").unwrap_or("19");
-    let timestamp = get_param("t").unwrap_or("0");
-    let x: u32 = get_param("x").and_then(|s| s.parse().ok()).unwrap_or(0);
-    let y: u32 = get_param("y").and_then(|s| s.parse().ok()).unwrap_or(0);
-    let date = get_param("d").unwrap_or(""); // YYYYMMDD format
-    let zoom: u32 = get_param("z").and_then(|s| s.parse().ok()).unwrap_or(4); // Default to max zoom
+    let sat = get_query_param(url, "sat").unwrap_or_else(|| "19".to_string());
+    let timestamp = get_query_param(url, "t").unwrap_or_else(|| "0".to_string());
+    let x: u32 = get_query_param(url, "x").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let y: u32 = get_query_param(url, "y").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let date = get_query_param(url, "d").unwrap_or_default(); // YYYYMMDD format
+    let zoom: u32 = get_query_param(url, "z").and_then(|s| s.parse().ok()).unwrap_or(4);
+    let cdn = get_cdn_url(url);
 
     // Clamp zoom to valid range (0-4 for GOES, 0-3 for Meteosat)
-    let max_zoom = satellite_max_zoom(sat);
+    let max_zoom = satellite_max_zoom(&sat);
     let zoom = zoom.min(max_zoom);
 
     // Check cache first
-    let key = cache_key(sat, timestamp, zoom, x, y);
+    let key = cache_key(&sat, &timestamp, zoom, x, y);
     if let Some(data) = get_cached_tile(&key) {
         println!("Cache hit: ({}, {}) z{}", x, y, zoom);
         let response = Response::from_data(data)
@@ -254,7 +250,7 @@ fn handle_slider_tile(request: Request) {
     // URL format from satpaper: {base}/data/imagery/{year}/{month}/{day}/{sat_id}---full_disk/geocolor/{timestamp}/{zoom}/{x:03}_{y:03}.png
     let target = format!(
         "{}/data/imagery/{:04}/{:02}/{:02}/{}---full_disk/geocolor/{}/{:02}/{:03}_{:03}.png",
-        SLIDER_BASE_URL, year, month, day, satellite_id(sat), timestamp, zoom, x, y
+        cdn, year, month, day, satellite_id(&sat), timestamp, zoom, x, y
     );
 
     println!("Fetching tile ({}, {}) z{}: {}", x, y, zoom, target);
