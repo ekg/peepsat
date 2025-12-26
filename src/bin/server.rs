@@ -29,6 +29,13 @@ lazy_static::lazy_static! {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap();
+    // HTTP client for NICT (accepts self-signed certs)
+    static ref NICT_CLIENT: reqwest::blocking::Client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
 }
 
 fn cache_key(sat: &str, timestamp: &str, zoom: u32, x: u32, y: u32) -> String {
@@ -158,10 +165,49 @@ fn get_cdn_url(url: &str) -> String {
     get_query_param(url, "cdn").unwrap_or_else(|| SLIDER_BASE_URL.to_string())
 }
 
+fn is_nict_cdn(cdn: &str) -> bool {
+    cdn.contains("himawari8") && cdn.contains("nict.go.jp")
+}
+
 fn handle_slider_latest(request: Request) {
     let url = request.url();
     let sat = get_query_param(url, "sat").unwrap_or_else(|| "19".to_string());
     let cdn = get_cdn_url(url);
+
+    // NICT Himawari uses different API
+    if is_nict_cdn(&cdn) {
+        let target = "https://himawari8.nict.go.jp/img/D531106/latest.json";
+        println!("Fetching NICT latest: {}", target);
+        match NICT_CLIENT.get(target).send() {
+            Ok(r) => {
+                // NICT returns {"date":"2025-12-26 18:30:00","file":"..."}
+                // Convert to SLIDER format {"timestamps_int":[...], ...}
+                if let Ok(text) = r.text() {
+                    if let Some(date_str) = text.split("\"date\":\"").nth(1).and_then(|s| s.split("\"").next()) {
+                        // Parse "2025-12-26 18:30:00" to timestamp format
+                        let parts: Vec<&str> = date_str.split(&['-', ' ', ':'][..]).collect();
+                        if parts.len() >= 5 {
+                            let ts = format!("{}{}{}{}{}", parts[0], parts[1], parts[2], parts[3], parts[4]);
+                            let ts_int: i64 = ts.parse().unwrap_or(0);
+                            let date_int: i64 = format!("{}{}{}", parts[0], parts[1], parts[2]).parse().unwrap_or(0);
+                            let json = format!(r#"{{"timestamps_int":[{}],"dates_int":[{}]}}"#, ts_int, date_int);
+                            let response = Response::from_data(json.into_bytes())
+                                .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
+                                .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
+                            let _ = request.respond(response);
+                            return;
+                        }
+                    }
+                }
+                let _ = request.respond(Response::from_string("Failed to parse NICT response").with_status_code(502));
+            }
+            Err(e) => {
+                println!("NICT latest error: {:?}", e);
+                let _ = request.respond(Response::from_string("Failed").with_status_code(502));
+            }
+        }
+        return;
+    }
 
     let target = format!(
         "{}/data/json/{}/full_disk/geocolor/latest_times.json",
@@ -188,6 +234,36 @@ fn handle_slider_dates(request: Request) {
     let url = request.url();
     let sat = get_query_param(url, "sat").unwrap_or_else(|| "19".to_string());
     let cdn = get_cdn_url(url);
+
+    // NICT doesn't have a dates endpoint, use same as latest
+    if is_nict_cdn(&cdn) {
+        let target = "https://himawari8.nict.go.jp/img/D531106/latest.json";
+        println!("Fetching NICT dates (from latest): {}", target);
+        match NICT_CLIENT.get(target).send() {
+            Ok(r) => {
+                if let Ok(text) = r.text() {
+                    if let Some(date_str) = text.split("\"date\":\"").nth(1).and_then(|s| s.split("\"").next()) {
+                        let parts: Vec<&str> = date_str.split(&['-', ' ', ':'][..]).collect();
+                        if parts.len() >= 3 {
+                            let date_int: i64 = format!("{}{}{}", parts[0], parts[1], parts[2]).parse().unwrap_or(0);
+                            let json = format!(r#"{{"dates_int":[{}]}}"#, date_int);
+                            let response = Response::from_data(json.into_bytes())
+                                .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
+                                .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
+                            let _ = request.respond(response);
+                            return;
+                        }
+                    }
+                }
+                let _ = request.respond(Response::from_string("Failed").with_status_code(502));
+            }
+            Err(e) => {
+                println!("NICT dates error: {:?}", e);
+                let _ = request.respond(Response::from_string("Failed").with_status_code(502));
+            }
+        }
+        return;
+    }
 
     let target = format!(
         "{}/data/json/{}/full_disk/geocolor/available_dates.json",
@@ -247,14 +323,29 @@ fn handle_slider_tile(request: Request) {
         (2024, 1, 1)
     };
 
-    // URL format from satpaper: {base}/data/imagery/{year}/{month}/{day}/{sat_id}---full_disk/geocolor/{timestamp}/{zoom}/{x:03}_{y:03}.png
-    let target = format!(
-        "{}/data/imagery/{:04}/{:02}/{:02}/{}---full_disk/geocolor/{}/{:02}/{:03}_{:03}.png",
-        cdn, year, month, day, satellite_id(&sat), timestamp, zoom, x, y
-    );
+    // NICT uses different URL format
+    let target = if is_nict_cdn(&cdn) {
+        // NICT zoom: 1d=1x1, 2d=2x2, 4d=4x4, 8d=8x8, 16d=16x16
+        // SLIDER zoom 0=1x1, 1=2x2, 2=4x4, 3=8x8, 4=16x16
+        let nict_zoom = 1u32 << zoom; // 2^zoom
+        // Timestamp format: YYYYMMDDHHMM00 -> we need HHMM
+        let hour = if timestamp.len() >= 10 { &timestamp[8..10] } else { "00" };
+        let min = if timestamp.len() >= 12 { &timestamp[10..12] } else { "00" };
+        format!(
+            "https://himawari8-dl.nict.go.jp/himawari8/img/D531106/{}d/550/{:04}/{:02}/{:02}/{}{}00_{}_{}.png",
+            nict_zoom, year, month, day, hour, min, y, x
+        )
+    } else {
+        // URL format from satpaper: {base}/data/imagery/{year}/{month}/{day}/{sat_id}---full_disk/geocolor/{timestamp}/{zoom}/{x:03}_{y:03}.png
+        format!(
+            "{}/data/imagery/{:04}/{:02}/{:02}/{}---full_disk/geocolor/{}/{:02}/{:03}_{:03}.png",
+            cdn, year, month, day, satellite_id(&sat), timestamp, zoom, x, y
+        )
+    };
 
     println!("Fetching tile ({}, {}) z{}: {}", x, y, zoom, target);
-    match HTTP_CLIENT.get(&target).send() {
+    let client = if is_nict_cdn(&cdn) { &*NICT_CLIENT } else { &*HTTP_CLIENT };
+    match client.get(&target).send() {
         Ok(r) => {
             let status = r.status();
             let bytes = r.bytes().unwrap_or_default();

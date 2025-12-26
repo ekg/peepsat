@@ -136,6 +136,7 @@
       <select id="cdnSelect">
         <option value="https://rammb-slider.cira.colostate.edu">rammb-slider.cira.colostate.edu</option>
         <option value="https://slider.cira.colostate.edu">slider.cira.colostate.edu</option>
+        <option value="https://himawari8-dl.nict.go.jp">himawari8.nict.go.jp (Himawari only)</option>
         <option value="custom">Custom...</option>
       </select>
     </label>
@@ -478,13 +479,24 @@
       // Meteosat: 464px tiles, max zoom 3 (8x8 = 64 tiles, 3712px full disk)
       'meteosat9': { tileSize: 464, maxZoom: 3 },
       'meteosat10': { tileSize: 464, maxZoom: 3 },
-      // Himawari: 688px tiles, max zoom 4
+      // Himawari via SLIDER: 688px tiles, max zoom 4
       'himawari': { tileSize: 688, maxZoom: 4 },
+      // Himawari via NICT: 550px tiles, max zoom 4 (16x16 = 256 tiles)
+      'himawari-nict': { tileSize: 550, maxZoom: 4 },
     };
+
+    // Get effective satellite config (may differ based on CDN)
+    function getEffectiveSatConfig(sat) {
+      const cdn = document.getElementById('cdnUrl').value;
+      if (cdn.includes('nict.go.jp') && (sat === 'himawari' || sat === '19' || sat === '18')) {
+        return TILE_CONFIG['himawari-nict'];
+      }
+      return TILE_CONFIG[sat];
+    }
 
     // Get zoom level config for a satellite
     function getZoomConfig(sat, zoomLevel) {
-      const config = TILE_CONFIG[sat];
+      const config = getEffectiveSatConfig(sat);
       if (!config) return null;
       const gridSize = Math.pow(2, zoomLevel);
       return {
@@ -496,7 +508,7 @@
 
     // Get best zoom level based on viewport zoom
     function getBestZoomLevel(viewportZoom, canvasW, canvasH, sat) {
-      const config = TILE_CONFIG[sat];
+      const config = getEffectiveSatConfig(sat);
       if (!config) return 0;
 
       const fullDiskPixels = Math.max(canvasW, canvasH);
@@ -625,7 +637,7 @@
 
     // Progressive drawing: use cached low-res tiles as fallback, then load high-res
     function drawWithFallback(sat, timestamp, date, targetZoom) {
-      const config = TILE_CONFIG[sat];
+      const config = getEffectiveSatConfig(sat);
       if (!config) return;
 
       const cw = canvas.width;
@@ -685,7 +697,7 @@
       if (frameIdx < 0 || frameIdx >= window.sliderTimestamps.length) return;
 
       const frame = window.sliderTimestamps[frameIdx];
-      const config = TILE_CONFIG[satellite];
+      const config = getEffectiveSatConfig(satellite);
       if (!config) {
         log(`Tile mode not supported for satellite ${satellite}`);
         return;
@@ -795,7 +807,7 @@
     }
 
     async function loadRemainingFrames() {
-      const config = TILE_CONFIG[satellite];
+      const config = getEffectiveSatConfig(satellite);
       if (!config) return;
 
       const sliderZoom = getBestZoomLevel(zoom, canvas.width, canvas.height, satellite);
@@ -818,7 +830,7 @@
     }
 
     async function loadLatestTile() {
-      const config = TILE_CONFIG[satellite];
+      const config = getEffectiveSatConfig(satellite);
       if (!config) {
         log(`Tile mode not available for satellite ${satellite}, using full image`);
         document.getElementById('tileMode').checked = false;
@@ -1079,7 +1091,7 @@
       // Get dimensions from image or tile config
       let iw, ih;
       if (isTileMode) {
-        const config = TILE_CONFIG[satellite];
+        const config = getEffectiveSatConfig(satellite);
         if (!config) return;
         // Use max zoom level for coordinate calculations
         const zoomConfig = getZoomConfig(satellite, config.maxZoom);
@@ -1141,7 +1153,7 @@
       // Get dimensions from image or tile config
       let iw, ih;
       if (isTileMode) {
-        const config = TILE_CONFIG[satellite];
+        const config = getEffectiveSatConfig(satellite);
         if (!config) return;
         // Use max zoom level for coordinate calculations
         const zoomConfig = getZoomConfig(satellite, config.maxZoom);
